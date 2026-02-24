@@ -2439,13 +2439,24 @@ const handleStudyAction = (action) => {
                                                             className="font-bold text-slate-700 text-sm md:text-base block bg-white border border-slate-200 rounded-lg px-2 py-1 w-[min(320px,70vw)]"
                                                         />
                                                     ) : (
-                                                        <span
-                                                            className="font-bold text-slate-700 text-sm md:text-base block"
-                                                            onDoubleClick={(e) => beginRenameSubject(e, subject)}
-                                                            title="Duplo clique para renomear"
-                                                        >
-                                                            {subject}
-                                                        </span>
+                                                        <div className="flex items-center gap-2">
+                                                            <span
+                                                                className="font-bold text-slate-700 text-sm md:text-base block"
+                                                                onDoubleClick={(e) => beginRenameSubject(e, subject)}
+                                                                title="Duplo clique para renomear"
+                                                            >
+                                                                {subject}
+                                                            </span>
+                                                            <button
+                                                                type="button"
+                                                                onClick={(e) => { e.stopPropagation(); beginRenameSubject(e, subject); }}
+                                                                className="text-slate-400 hover:text-slate-600 transition-colors"
+                                                                title="Renomear"
+                                                                aria-label="Renomear pasta"
+                                                            >
+                                                                ✏️
+                                                            </button>
+                                                        </div>
                                                     )}
                                                     <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">{Object.keys(concepts).length} Conceitos</span>
                                                 </div>
@@ -2489,6 +2500,7 @@ const handleStudyAction = (action) => {
                                                                                 className="text-sm font-semibold bg-white border border-slate-200 rounded-lg px-2 py-1 w-[min(320px,60vw)] text-slate-800"
                                                                             />
                                                                         ) : (
+                                                                        <div className="flex items-center gap-2">
                                                                             <span
                                                                                 className={`text-sm font-semibold transition-colors ${isConcExpanded ? 'text-slate-800' : 'text-slate-600'}`}
                                                                                 onDoubleClick={(e) => beginRenameConcept(e, subject, concept)}
@@ -2496,6 +2508,16 @@ const handleStudyAction = (action) => {
                                                                             >
                                                                                 {concept}
                                                                             </span>
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={(e) => { e.stopPropagation(); beginRenameConcept(e, subject, concept); }}
+                                                                                className="text-slate-400 hover:text-slate-600 transition-colors"
+                                                                                title="Renomear"
+                                                                                aria-label="Renomear pasta"
+                                                                            >
+                                                                                ✏️
+                                                                            </button>
+                                                                        </div>
                                                                         )}
                                                                         <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-md font-bold border border-slate-200">{cards.length}</span>
                                                                     </div>
