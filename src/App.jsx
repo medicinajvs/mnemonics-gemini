@@ -161,7 +161,11 @@ const [studySessionDateKey, setStudySessionDateKey] = useState('');
 // UI State
     const [expandedSubjects, setExpandedSubjects] = useState({});
     const [expandedConcepts, setExpandedConcepts] = useState({});
-    
+
+    // Acervo: edição de nomes das pastas (Matéria / Conceito)
+    const [editingSubjectKey, setEditingSubjectKey] = useState(null); // chave em UPPERCASE (igual ao libraryTree)
+    const [editingConceptKey, setEditingConceptKey] = useState(null); // chave "SUBJECT::CONCEPT" (ambos UPPERCASE)
+    const [editNameValue, setEditNameValue] = useState('');
     // Calendar State
     const [calDate, setCalDate] = useState(new Date());
     const [calEvents, setCalEvents] = useState({});
@@ -1234,6 +1238,93 @@ const studyConceptsForSubject = useMemo(() => {
     const toggleSubject = (s) => setExpandedSubjects(prev => ({ ...prev, [s]: !prev[s] }));
     const toggleConcept = (c) => setExpandedConcepts(prev => ({ ...prev, [c]: !prev[c] }));
 
+    // --- Renomear pastas do Acervo ---
+    const beginRenameSubject = (e, subjectKeyUpper) => {
+        e?.stopPropagation?.();
+        setEditingConceptKey(null);
+        setEditingSubjectKey(subjectKeyUpper);
+        setEditNameValue(subjectKeyUpper); // mostra o que está na árvore (UPPERCASE)
+    };
+
+    const beginRenameConcept = (e, subjectKeyUpper, conceptKeyUpper) => {
+        e?.stopPropagation?.();
+        setEditingSubjectKey(null);
+        setEditingConceptKey(`${subjectKeyUpper}::${conceptKeyUpper}`);
+        setEditNameValue(conceptKeyUpper);
+    };
+
+    const commitRenameSubject = (oldSubjectUpper, rawNewName) => {
+        const newName = String(rawNewName ?? '').trim();
+        setEditingSubjectKey(null);
+        setEditNameValue('');
+
+        if (!newName) return;
+        const newUpper = newName.toUpperCase();
+
+        // Atualiza cards (fonte da árvore)
+        setLibrary(prev => prev.map(card => {
+            const s = (card?.subject ?? '').toString();
+            if (s && s.toUpperCase() === oldSubjectUpper) {
+                return { ...card, subject: newName };
+            }
+            return card;
+        }));
+
+        // Ajusta UI (expansão) para não "sumir" o estado ao renomear
+        const oldId = oldSubjectUpper.replace(/\s/g, '_');
+        const newId = newUpper.replace(/\s/g, '_');
+        setExpandedSubjects(prev => {
+            if (oldId === newId) return prev;
+            const next = { ...prev };
+            if (Object.prototype.hasOwnProperty.call(next, oldId)) {
+                next[newId] = next[oldId];
+                delete next[oldId];
+            }
+            return next;
+        });
+
+        // Ajusta seleção do Treino, se estiver usando a matéria renomeada
+        setStudySubject(prev => (String(prev || '').toUpperCase() === oldSubjectUpper ? newUpper : prev));
+    };
+
+    const commitRenameConcept = (subjectUpper, oldConceptUpper, rawNewName) => {
+        const newName = String(rawNewName ?? '').trim();
+        setEditingConceptKey(null);
+        setEditNameValue('');
+
+        if (!newName) return;
+        const newUpper = newName.toUpperCase();
+
+        setLibrary(prev => prev.map(card => {
+            const s = (card?.subject ?? '').toString();
+            const c = (card?.concept ?? '').toString();
+            if (s && c && s.toUpperCase() === subjectUpper && c.toUpperCase() === oldConceptUpper) {
+                return { ...card, concept: newName };
+            }
+            return card;
+        }));
+
+        // Ajusta seleção do Treino, se estiver usando o conceito renomeado
+        setStudyConcept(prev => {
+            const ps = String(studySubject || '').toUpperCase();
+            const pc = String(prev || '').toUpperCase();
+            if (ps === subjectUpper && pc === oldConceptUpper) return newUpper;
+            return prev;
+        });
+
+        // Ajusta estado de expansão do conceito (mantém aberto/fechado)
+        const oldConcId = `${subjectUpper.replace(/\s/g, '_')}-${oldConceptUpper.replace(/\s/g, '_')}`;
+        const newConcId = `${subjectUpper.replace(/\s/g, '_')}-${newUpper.replace(/\s/g, '_')}`;
+        setExpandedConcepts(prev => {
+            if (oldConcId === newConcId) return prev;
+            const next = { ...prev };
+            if (Object.prototype.hasOwnProperty.call(next, oldConcId)) {
+                next[newConcId] = next[oldConcId];
+                delete next[oldConcId];
+            }
+            return next;
+        });
+    };
 const shuffleArray = (arr) => {
     const a = [...arr];
     for (let i = a.length - 1; i > 0; i--) {
@@ -2334,7 +2425,28 @@ const handleStudyAction = (action) => {
                                                     )}
                                                 </div>
                                                 <div>
-                                                    <span className="font-bold text-slate-700 text-sm md:text-base block">{subject}</span>
+                                                    {editingSubjectKey === subject ? (
+                                                        <input
+                                                            autoFocus
+                                                            value={editNameValue}
+                                                            onChange={(e) => setEditNameValue(e.target.value)}
+                                                            onClick={(e) => e.stopPropagation()}
+                                                            onKeyDown={(e) => {
+                                                                if (e.key === 'Enter') commitRenameSubject(subject, editNameValue);
+                                                                if (e.key === 'Escape') { setEditingSubjectKey(null); setEditNameValue(''); }
+                                                            }}
+                                                            onBlur={() => commitRenameSubject(subject, editNameValue)}
+                                                            className="font-bold text-slate-700 text-sm md:text-base block bg-white border border-slate-200 rounded-lg px-2 py-1 w-[min(320px,70vw)]"
+                                                        />
+                                                    ) : (
+                                                        <span
+                                                            className="font-bold text-slate-700 text-sm md:text-base block"
+                                                            onDoubleClick={(e) => beginRenameSubject(e, subject)}
+                                                            title="Duplo clique para renomear"
+                                                        >
+                                                            {subject}
+                                                        </span>
+                                                    )}
                                                     <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">{Object.keys(concepts).length} Conceitos</span>
                                                 </div>
                                             </div>
@@ -2363,7 +2475,28 @@ const handleStudyAction = (action) => {
                                                                 >
                                                                     <div className="flex items-center gap-2.5">
                                                                         <span className={`w-2 h-2 rounded-full ring-2 ring-white shadow-sm ${isConcExpanded ? 'bg-medical-500' : 'bg-slate-300'}`}></span>
-                                                                        <span className={`text-sm font-semibold transition-colors ${isConcExpanded ? 'text-slate-800' : 'text-slate-600'}`}>{concept}</span>
+                                                                        {editingConceptKey === `${subject}::${concept}` ? (
+                                                                            <input
+                                                                                autoFocus
+                                                                                value={editNameValue}
+                                                                                onChange={(e) => setEditNameValue(e.target.value)}
+                                                                                onClick={(e) => e.stopPropagation()}
+                                                                                onKeyDown={(e) => {
+                                                                                    if (e.key === 'Enter') commitRenameConcept(subject, concept, editNameValue);
+                                                                                    if (e.key === 'Escape') { setEditingConceptKey(null); setEditNameValue(''); }
+                                                                                }}
+                                                                                onBlur={() => commitRenameConcept(subject, concept, editNameValue)}
+                                                                                className="text-sm font-semibold bg-white border border-slate-200 rounded-lg px-2 py-1 w-[min(320px,60vw)] text-slate-800"
+                                                                            />
+                                                                        ) : (
+                                                                            <span
+                                                                                className={`text-sm font-semibold transition-colors ${isConcExpanded ? 'text-slate-800' : 'text-slate-600'}`}
+                                                                                onDoubleClick={(e) => beginRenameConcept(e, subject, concept)}
+                                                                                title="Duplo clique para renomear"
+                                                                            >
+                                                                                {concept}
+                                                                            </span>
+                                                                        )}
                                                                         <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-md font-bold border border-slate-200">{cards.length}</span>
                                                                     </div>
                                                                     <svg className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isConcExpanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
