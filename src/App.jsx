@@ -112,15 +112,135 @@ export default function App() {
     });
     const [autoSync, setAutoSync] = useState(true);
 
-    // Opções de pastas (Matéria/Conceito) a partir do Acervo — Fase 3
+const [customFolders, setCustomFolders] = useState(() => {
+    try {
+        const raw = localStorage.getItem('acervo_custom_folders');
+        const parsed = raw ? JSON.parse(raw) : null;
+        return (parsed && typeof parsed === 'object') ? parsed : { subjects: {} };
+    } catch {
+        return { subjects: {} };
+    }
+});
+const [acervoStartDate, setAcervoStartDate] = useState(() => new Date().toISOString().split('T')[0]);
+
+useEffect(() => {
+    try { localStorage.setItem('acervo_custom_folders', JSON.stringify(customFolders)); } catch {}
+}, [customFolders]);
+
+
+    
+    // --- Planejador de Revisões (Acervo) ---
+    const [reviewPlans, setReviewPlans] = useState(() => {
+        try {
+            const raw = localStorage.getItem('acervo_review_plans');
+            const parsed = raw ? JSON.parse(raw) : [];
+            return Array.isArray(parsed) ? parsed : [];
+        } catch {
+            return [];
+        }
+    });
+    const [plannerDate, setPlannerDate] = useState(() => new Date().toISOString().split('T')[0]);
+    const [plannerSubject, setPlannerSubject] = useState('');
+    const [plannerConcept, setPlannerConcept] = useState(''); // vazio = matéria inteira
+
+    useEffect(() => {
+        try { localStorage.setItem('acervo_review_plans', JSON.stringify(reviewPlans)); } catch {}
+    }, [reviewPlans]);
+
+    const applyScheduleToCards = (subjectName, conceptNameOrEmpty, isoDate, { reset = true } = {}) => {
+        const subj = (subjectName || '').toString().trim();
+        const concept = (conceptNameOrEmpty || '').toString().trim();
+        if (!subj || !isoDate) return;
+
+        setLibrary((prev) => prev.map((c) => {
+            const s = (c?.subject || '').toString().trim();
+            if (s !== subj) return c;
+
+            if (concept) {
+                const k = (c?.concept || '').toString().trim();
+                if (k !== concept) return c;
+            }
+
+            // aplica data e (opcionalmente) reinicia SRS
+            return {
+                ...c,
+                srsDue: isoDate,
+                ...(reset ? {
+                    srsEase: 2.5,
+                    srsReps: 0,
+                    srsInterval: 0,
+                    srsLast: null,
+                    studyHistory: [],
+                } : {})
+            };
+        }));
+    };
+
+    const addReviewPlan = () => {
+        const date = (plannerDate || '').toString().trim();
+        const subj = (plannerSubject || '').toString().trim();
+        const conc = (plannerConcept || '').toString().trim();
+
+        if (!date || !subj) {
+            showToast('Escolha uma data e uma Matéria.', 'warning');
+            return;
+        }
+
+        const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+        const item = {
+            id,
+            date,
+            subject: subj,
+            concept: conc, // vazio = matéria inteira
+        };
+
+        setReviewPlans((prev) => [item, ...prev]);
+
+        // já agenda os cards para a data escolhida
+        applyScheduleToCards(subj, conc, date, { reset: true });
+
+        showToast(`Revisão agendada: ${subj}${conc ? ` • ${conc}` : ''} em ${new Date(date).toLocaleDateString('pt-BR')}`, 'success');
+    };
+
+    const removeReviewPlan = (id) => {
+        setReviewPlans((prev) => prev.filter((p) => p.id !== id));
+    };
+
+    const plannerConceptOptions = useMemo(() => {
+        const subj = (plannerSubject || '').toString().trim();
+        if (!subj) return [];
+        const set = new Set();
+        for (const c of library) {
+            const s = (c?.subject || '').toString().trim();
+            if (s !== subj) continue;
+            const k = (c?.concept || '').toString().trim();
+            if (k) set.add(k);
+        }
+        const subjUpper = subj.toUpperCase();
+        const subjEntry = (customFolders?.subjects || {})[subjUpper];
+        const concObj = subjEntry?.concepts || {};
+        Object.values(concObj).forEach(cn => {
+            const n = (cn?.name || '').toString().trim();
+            if (n) set.add(n);
+        });
+        return Array.from(set).sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
+    }, [plannerSubject, library, customFolders]);
+// Opções de pastas (Matéria/Conceito) a partir do Acervo — Fase 3
     const subjectOptions = useMemo(() => {
         const set = new Set();
         for (const c of library) {
             const s = (c?.subject || '').toString().trim();
             if (s) set.add(s);
         }
-        return Array.from(set).sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
-    }, [library]);
+        // Inclui pastas personalizadas (mesmo sem cards)
+const subjObj = customFolders?.subjects || {};
+Object.values(subjObj).forEach(s => {
+    const n = (s?.name || '').toString().trim();
+    if (n) set.add(n);
+});
+
+return Array.from(set).sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
+    }, [library, customFolders]);
 
     const conceptOptions = useMemo(() => {
         const subj = (form.subject || '').toString().trim();
@@ -132,8 +252,17 @@ export default function App() {
             const k = (c?.concept || '').toString().trim();
             if (k) set.add(k);
         }
-        return Array.from(set).sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
-    }, [library, form.subject]);
+        // Inclui conceitos personalizados (mesmo sem cards)
+const subjUpper = subj.toUpperCase();
+const subjEntry = (customFolders?.subjects || {})[subjUpper];
+const concObj = subjEntry?.concepts || {};
+Object.values(concObj).forEach(cn => {
+    const n = (cn?.name || '').toString().trim();
+    if (n) set.add(n);
+});
+
+return Array.from(set).sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
+    }, [library, form.subject, customFolders]);
 
 
     // Preview panel state (arraste no verso)
@@ -166,6 +295,9 @@ const [studySessionDateKey, setStudySessionDateKey] = useState('');
     const [editingSubjectKey, setEditingSubjectKey] = useState(null); // chave em UPPERCASE (igual ao libraryTree)
     const [editingConceptKey, setEditingConceptKey] = useState(null); // chave "SUBJECT::CONCEPT" (ambos UPPERCASE)
     const [editNameValue, setEditNameValue] = useState('');
+
+// Acervo: pastas personalizadas (Matéria/Conceito) — persistido
+
     // Calendar State
     const [calDate, setCalDate] = useState(new Date());
     const [calEvents, setCalEvents] = useState({});
@@ -287,6 +419,30 @@ const [studySessionDateKey, setStudySessionDateKey] = useState('');
 
         initScripts();
     }, []);
+
+// Tenta manter login entre sessões (melhor esforço)
+useEffect(() => {
+    const trySilent = async () => {
+        try {
+            const has = localStorage.getItem('google_has_token') === '1';
+            const exp = Number(localStorage.getItem('google_token_expires_at') || 0);
+            if (!has) return;
+            if (exp && Date.now() > exp) return;
+            if (!tokenClientRef.current) return;
+
+            tokenClientRef.current.callback = async (resp) => {
+                if (resp?.error) return;
+                await fetchMonthEvents();
+                fetchUpcomingEvents();
+                fetchUserProfile();
+            };
+
+            tokenClientRef.current.requestAccessToken({ prompt: '' });
+        } catch {}
+    };
+    trySilent();
+}, []);
+
 
     // Atualizar LocalStorage quando a biblioteca mudar
     useEffect(() => {
@@ -526,6 +682,13 @@ const [studySessionDateKey, setStudySessionDateKey] = useState('');
     const handleAuthClick = () => {
         tokenClientRef.current.callback = async (resp) => {
             if (resp.error) throw (resp);
+try {
+    const expiresIn = Number(resp.expires_in || resp.expiresIn || 0);
+    if (expiresIn) {
+        localStorage.setItem('google_token_expires_at', String(Date.now() + expiresIn * 1000));
+    }
+    localStorage.setItem('google_has_token', '1');
+} catch {}
             await fetchMonthEvents();
             fetchUpcomingEvents();
             fetchUserProfile();
@@ -546,6 +709,7 @@ const [studySessionDateKey, setStudySessionDateKey] = useState('');
             showToast("Desconectado", "error");
             setCalEvents({});
             setUpcomingEvents([]);
+            try { localStorage.removeItem('google_has_token'); localStorage.removeItem('google_token_expires_at'); } catch {}
         }
     };
 
@@ -1089,17 +1253,33 @@ const [studySessionDateKey, setStudySessionDateKey] = useState('');
             card.concept.toLowerCase().includes(searchTerm.toLowerCase()) ||
             card.question.toLowerCase().includes(searchTerm.toLowerCase())
         );
-        
+
         const tree = {};
+
+        // Semeia com pastas personalizadas (mesmo vazias)
+        const subjObj = customFolders?.subjects || {};
+        Object.entries(subjObj).forEach(([subjUpper, subjEntry]) => {
+            const subjName = (subjEntry?.name || '').toString().trim() || subjUpper;
+            const subjKey = subjName.toUpperCase();
+            if (!tree[subjKey]) tree[subjKey] = {};
+            const concObj = subjEntry?.concepts || {};
+            Object.entries(concObj).forEach(([concUpper, concEntry]) => {
+                const concName = (concEntry?.name || '').toString().trim() || concUpper;
+                const concKey = concName.toUpperCase();
+                if (!tree[subjKey][concKey]) tree[subjKey][concKey] = [];
+            });
+        });
+
+        // Insere cards
         filtered.forEach(card => {
-            const s = card.subject.toUpperCase();
-            const c = card.concept.toUpperCase();
+            const s = String(card.subject || '').toUpperCase();
+            const c = String(card.concept || '').toUpperCase();
             if (!tree[s]) tree[s] = {};
             if (!tree[s][c]) tree[s][c] = [];
             tree[s][c].push(card);
         });
         return tree;
-    }, [library, searchTerm]);
+    }, [library, searchTerm, customFolders]);
 
 
     
@@ -1270,6 +1450,19 @@ const studyConceptsForSubject = useMemo(() => {
             return card;
         }));
 
+// Atualiza pasta personalizada, se existir
+setCustomFolders(prev => {
+    const base = prev || { subjects: {} };
+    const subjects = { ...(base.subjects || {}) };
+    const oldEntry = subjects[oldSubjectUpper];
+    if (!oldEntry) return base;
+    const nextEntry = { ...oldEntry, name: newName };
+    delete subjects[oldSubjectUpper];
+    subjects[newUpper] = nextEntry;
+    return { ...base, subjects };
+});
+
+
         // Ajusta UI (expansão) para não "sumir" o estado ao renomear
         const oldId = oldSubjectUpper.replace(/\s/g, '_');
         const newId = newUpper.replace(/\s/g, '_');
@@ -1304,6 +1497,22 @@ const studyConceptsForSubject = useMemo(() => {
             return card;
         }));
 
+// Atualiza pasta personalizada, se existir
+setCustomFolders(prev => {
+    const base = prev || { subjects: {} };
+    const subjects = { ...(base.subjects || {}) };
+    const subj = subjects[subjectUpper];
+    if (!subj) return base;
+    const concepts = { ...(subj.concepts || {}) };
+    const oldEntry = concepts[oldConceptUpper];
+    if (!oldEntry) return base;
+    delete concepts[oldConceptUpper];
+    concepts[newUpper] = { ...oldEntry, name: newName };
+    subjects[subjectUpper] = { ...subj, concepts };
+    return { ...base, subjects };
+});
+
+
         // Ajusta seleção do Treino, se estiver usando o conceito renomeado
         setStudyConcept(prev => {
             const ps = String(studySubject || '').toUpperCase();
@@ -1325,6 +1534,126 @@ const studyConceptsForSubject = useMemo(() => {
             return next;
         });
     };
+
+// --- ACERVO: CRIAR/REMOVER PASTAS (Matéria/Conceito) ---
+const normalizeFolderName = (v) => String(v ?? '').trim().replace(/\s+/g, ' ');
+
+const ensureSubjectFolder = (subjectNameOrUpper) => {
+    const name = normalizeFolderName(subjectNameOrUpper);
+    if (!name) return null;
+    const key = name.toUpperCase();
+    setCustomFolders(prev => {
+        const next = { ...(prev || { subjects: {} }), subjects: { ...((prev || {}).subjects || {}) } };
+        if (!next.subjects[key]) next.subjects[key] = { name, concepts: {} };
+        return next;
+    });
+    return key;
+};
+
+const ensureConceptFolder = (subjectUpper, conceptName) => {
+    const name = normalizeFolderName(conceptName);
+    if (!name) return null;
+    const subjKey = String(subjectUpper || '').toUpperCase();
+    const concKey = name.toUpperCase();
+    setCustomFolders(prev => {
+        const base = prev || { subjects: {} };
+        const subjects = { ...(base.subjects || {}) };
+        const subj = subjects[subjKey] || { name: subjKey, concepts: {} };
+        const concepts = { ...(subj.concepts || {}) };
+        if (!concepts[concKey]) concepts[concKey] = { name };
+        subjects[subjKey] = { ...subj, name: subj.name || subjKey, concepts };
+        return { ...base, subjects };
+    });
+    return concKey;
+};
+
+const promptCreateSubject = () => {
+    const name = normalizeFolderName(prompt('Nome da nova Matéria:') || '');
+    if (!name) return;
+    ensureSubjectFolder(name);
+    showToast('Matéria criada no Acervo', 'success');
+};
+
+const promptCreateConcept = (subjectUpper) => {
+    const name = normalizeFolderName(prompt('Nome do novo Conceito:') || '');
+    if (!name) return;
+    ensureSubjectFolder(subjectUpper);
+    ensureConceptFolder(subjectUpper, name);
+    showToast('Conceito criado no Acervo', 'success');
+};
+
+const deleteSubjectFolder = (subjectUpper) => {
+    const subjKey = String(subjectUpper || '').toUpperCase();
+    const ok = confirm(`Remover a matéria "${subjectUpper}"?\n\nIsso remove a pasta do Acervo. Os cards dessa matéria também serão removidos do Acervo.`);
+    if (!ok) return;
+
+    setCustomFolders(prev => {
+        const base = prev || { subjects: {} };
+        const subjects = { ...(base.subjects || {}) };
+        delete subjects[subjKey];
+        return { ...base, subjects };
+    });
+
+    // Remove cards dessa matéria (para manter coerência com o Acervo)
+    setLibrary(prev => prev.filter(card => String(card?.subject || '').toUpperCase() !== subjKey));
+
+    // Limpa expansão
+    const subId = subjKey.replace(/\s/g, '_');
+    setExpandedSubjects(prev => { const n = { ...prev }; delete n[subId]; return n; });
+
+    showToast('Matéria removida', 'error');
+};
+
+const deleteConceptFolder = (subjectUpper, conceptUpper) => {
+    const subjKey = String(subjectUpper || '').toUpperCase();
+    const concKey = String(conceptUpper || '').toUpperCase();
+    const ok = confirm(`Remover o conceito "${conceptUpper}" da matéria "${subjectUpper}"?\n\nOs cards desse conceito também serão removidos do Acervo.`);
+    if (!ok) return;
+
+    setCustomFolders(prev => {
+        const base = prev || { subjects: {} };
+        const subjects = { ...(base.subjects || {}) };
+        const subj = subjects[subjKey];
+        if (!subj) return base;
+        const concepts = { ...(subj.concepts || {}) };
+        delete concepts[concKey];
+        subjects[subjKey] = { ...subj, concepts };
+        return { ...base, subjects };
+    });
+
+    setLibrary(prev => prev.filter(card => {
+        const s = String(card?.subject || '').toUpperCase();
+        const c = String(card?.concept || '').toUpperCase();
+        return !(s === subjKey && c === concKey);
+    }));
+
+    showToast('Conceito removido', 'error');
+};
+
+// --- ACERVO: AGENDAR/REINICIAR REVISÕES PARA UMA PASTA ---
+const resetSrsForFolder = (subjectUpper, conceptUpper, dueDateKey) => {
+    const subjKey = String(subjectUpper || '').toUpperCase();
+    const concKey = conceptUpper ? String(conceptUpper).toUpperCase() : null;
+    const due = String(dueDateKey || new Date().toISOString().split('T')[0]);
+
+    setLibrary(prev => prev.map(card => {
+        const s = String(card?.subject || '').toUpperCase();
+        const c = String(card?.concept || '').toUpperCase();
+        if (s !== subjKey) return card;
+        if (concKey && c !== concKey) return card;
+
+        return { ...card, srsEase: 2.5, srsReps: 0, srsInterval: 0, srsDue: due };
+    }));
+
+    showToast('Revisões agendadas', 'success');
+};
+
+const clearSrsForFolder = (subjectUpper, conceptUpper, dueDateKey) => {
+    // Nesta versão, "reiniciar" = zerar progresso e re-agendar a partir da data escolhida
+    resetSrsForFolder(subjectUpper, conceptUpper, dueDateKey);
+    showToast('Reiniciado e agendado', 'success');
+};
+
 const shuffleArray = (arr) => {
     const a = [...arr];
     for (let i = a.length - 1; i > 0; i--) {
@@ -1733,142 +2062,15 @@ const handleStudyAction = (action) => {
                             </div>
                         </div>
 
-                        <div className="mb-5 space-y-1.5">
-                            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider pl-1">Imagem Ilustrativa</label>
-                            <label className="flex flex-col items-center justify-center w-full h-24 md:h-28 border-2 border-dashed border-slate-300 rounded-2xl cursor-pointer bg-slate-50 hover:bg-slate-100 transition-all relative overflow-hidden group">
-                                {form.image ? (
-                                    <img src={form.image} alt="Preview" className="absolute inset-0 w-full h-full object-contain bg-white opacity-90 p-2" />
-                                ) : (
-                                    <div className="flex flex-col items-center justify-center text-slate-400 group-hover:text-medical-500 transition">
-                                        <svg className="w-8 h-8 mb-2 opacity-50 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                                        <p className="text-[10px] uppercase font-bold tracking-wide">Clique para selecionar</p>
-                                    </div>
-                                )}
-                                <input type="file" accept="image/*" multiple className="hidden" onChange={handleImageUpload} />
-                            </label>
-                        </div>
+                
 
-                        {/* --- CAMADAS DE IMAGEM (múltiplas artes) --- */}
-                        <div className="mb-5">
-                            <div className="flex items-center justify-between mb-2">
-                                <div className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider">Camadas de imagem</div>
-                                <div className="text-[10px] text-slate-400 font-semibold">{(form.images?.length || 0)} item(ns)</div>
-                            </div>
-
-                            {(form.images?.length || 0) === 0 ? (
-                                <div className="text-xs text-slate-400 bg-slate-50 border border-dashed border-slate-200 rounded-2xl p-3">
-                                    Você pode adicionar <b>mais de uma imagem</b>. Use o upload acima para adicionar várias.
-                                </div>
-                            ) : (
-                                <div className="flex flex-wrap gap-2">
-                                    {form.images.map((img, idx) => {
-                                        const isActive = form.activeImageId === img.id;
-                                        return (
-                                            <button
-                                                key={img.id}
-                                                onClick={() => setForm(prev => ({ ...prev, activeImageId: img.id, image: prev.image || img.src }))}
-                                                className={`flex items-center gap-2 px-2.5 py-2 rounded-2xl border text-xs font-bold transition ${isActive ? 'bg-medical-50 border-medical-200 text-medical-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
-                                                title="Selecionar camada"
-                                            >
-                                                <img src={img.src} alt={`img-${idx}`} className="w-9 h-9 rounded-xl object-cover border border-slate-200" />
-                                                <span>Imagem {idx + 1}</span>
-
-                                                <span
-                                                    onClick={(e) => {
-                                                        e.preventDefault();
-                                                        e.stopPropagation();
-                                                        setForm(prev => {
-                                                            const next = (prev.images || []).filter(x => x.id !== img.id);
-                                                            const nextActive = (prev.activeImageId === img.id) ? (next[0]?.id ?? null) : prev.activeImageId;
-                                                            return { 
-                                                                ...prev, 
-                                                                images: next, 
-                                                                activeImageId: nextActive,
-                                                                image: next[0]?.src ?? null,
-                                                            };
-                                                        });
-                                                    }}
-                                                    className="ml-1 inline-flex items-center justify-center w-6 h-6 rounded-xl bg-slate-100 hover:bg-red-50 hover:text-red-600 text-slate-500 transition"
-                                                    title="Remover"
-                                                >
-                                                    ✕
-                                                </span>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            )}
-                        </div>
-
-                        
-                        {/* --- CONTROLES DE EDIÇÃO DO CARD (tamanho do texto e imagem) --- */}
-                        <div className="mb-6">
-
-{/* 3. AÇÕES (SALVAR / CANCELAR) */}
-                            <div className="bg-white/70 border border-slate-200 rounded-2xl p-4 flex flex-col">
-                                <div className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-2">Ações</div>
-                                <div className="text-[11px] text-slate-500 font-semibold mb-4">Salve o flashcard depois de ajustar texto e imagem.</div>
-
-                                <div className="mt-auto flex flex-col gap-3">
-                                    {form.id && (
-                                        <button
-                                            onClick={cancelEdit}
-                                            className="w-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-3.5 rounded-xl transition text-xs uppercase tracking-wide"
-                                        >
-                                            Cancelar
-                                        </button>
-                                    )}
-                                    <button
-                                        onClick={handleSave}
-                                        className="w-full bg-gradient-to-r from-medical-500 to-medical-600 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-medical-500/30 transition-all hover:-translate-y-0.5 hover:shadow-medical-500/40 flex items-center justify-center gap-2 text-sm uppercase tracking-wide transform active:scale-95"
-                                    >
-                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clipRule="evenodd" /></svg>
-                                        <span>{form.id ? "Atualizar" : "Salvar Flashcard"}</span>
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="space-y-5 mb-8">
-                            <div className="space-y-1.5">
-                                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider pl-1">Pergunta <span className="text-slate-300 font-normal ml-1">(Use **texto** para destaque)</span>
-                                    <div className="mt-2 flex gap-2">
-                                        <button type="button" onClick={() => wrapSelectionWithHighlight(questionRef, "question")} className="text-[10px] px-3 py-1.5 rounded-lg bg-yellow-50 text-yellow-700 font-extrabold border border-yellow-200 hover:bg-yellow-100 transition">Destacar seleção</button>
-                                        <button type="button" onClick={() => removeHighlightFromSelection(questionRef, "question")} className="text-[10px] px-3 py-1.5 rounded-lg bg-slate-50 text-slate-600 font-extrabold border border-slate-200 hover:bg-slate-100 transition">Remover destaque</button>
-                                    </div>
-                                </label>
-                                <textarea 
-                                    ref={questionRef}
-                                    value={form.question}
-                                    onChange={(e) => setForm({...form, question: e.target.value})}
-                                    rows="3" 
-                                    className="input-field w-full p-3 rounded-xl bg-white text-sm font-semibold text-slate-800 placeholder:text-slate-400 shadow-sm border border-slate-300 focus:border-medical-500 focus:ring-2 focus:ring-medical-500/20 focus:outline-none transition-all resize-none" 
-                                    placeholder="Ex: O que é **Pericardite**?"
-                                ></textarea>
-                            </div>
-                            <div className="space-y-1.5">
-                                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider pl-1">Resposta
-                                    <div className="mt-2 flex gap-2">
-                                        <button type="button" onClick={() => wrapSelectionWithHighlight(answerRef, "answer")} className="text-[10px] px-3 py-1.5 rounded-lg bg-yellow-50 text-yellow-700 font-extrabold border border-yellow-200 hover:bg-yellow-100 transition">Destacar seleção</button>
-                                        <button type="button" onClick={() => removeHighlightFromSelection(answerRef, "answer")} className="text-[10px] px-3 py-1.5 rounded-lg bg-slate-50 text-slate-600 font-extrabold border border-slate-200 hover:bg-slate-100 transition">Remover destaque</button>
-                                    </div>
-                                </label>
-                                <textarea 
-                                    ref={answerRef}
-                                    value={form.answer}
-                                    onChange={(e) => setForm({...form, answer: e.target.value})}
-                                    rows="5" 
-                                    className="input-field w-full p-3 rounded-xl bg-white text-sm font-semibold text-slate-800 placeholder:text-slate-400 shadow-sm border border-slate-300 focus:border-medical-500 focus:ring-2 focus:ring-medical-500/20 focus:outline-none transition-all resize-none" 
-                                    placeholder="Digite a resposta completa..."
-                                ></textarea>
-                            </div>
-                        </div>
 
                     </div>
 
                     
 
                 </div>
+            </div>
             
 
             {/* ESTUDO (NOVO) */}
@@ -2387,7 +2589,83 @@ const handleStudyAction = (action) => {
                                 </h2>
                                 <p className="text-[10px] text-slate-500 mt-0.5 font-medium uppercase tracking-wide">Matéria &gt Conceito &gt Cards • Clique para expandir</p>
                             </div>
-                            <button onClick={handleClearStorage} className="text-xs bg-white border border-red-100 text-red-500 hover:bg-red-50 px-3 py-1.5 rounded-lg font-bold transition">Limpar</button>
+                            <div className="flex items-center gap-2 flex-wrap justify-end">
+                                <button
+                                    type="button"
+                                    onClick={promptCreateSubject}
+                                    className="text-xs bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1"
+                                    title="Criar nova Matéria"
+                                >
+                                    <span className="text-sm leading-none">＋</span> Matéria
+                                </button>
+
+                                <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-2 py-1.5">
+                                    <span className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wide">Início</span>
+                                    <input
+                                        type="date"
+                                        value={acervoStartDate || ""}
+                                        onChange={(e) => setAcervoStartDate(e.target.value)}
+                                        onClick={(e) => {
+                                            // Em alguns navegadores (ou com CSS apertado), o picker não abre ao clicar no texto.
+                                            // showPicker() é suportado em Chromium (Chrome/Edge/Opera).
+                                            e.currentTarget.showPicker?.();
+                                        }}
+                                        className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer"
+                                        style={{ minWidth: 140, pointerEvents: "auto" }}
+                                    />
+                                </div>
+
+                                {/* Planejar revisões por data (Matéria/Conceito) */}
+                                <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-2 py-1.5 flex-wrap">
+                                    <span className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wide">Planejar</span>
+
+                                    <input
+                                        type="date"
+                                        value={plannerDate || ""}
+                                        onChange={(e) => setPlannerDate(e.target.value)}
+                                        onClick={(e) => { e.currentTarget.showPicker?.(); }}
+                                        className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer"
+                                        style={{ minWidth: 140, pointerEvents: "auto" }}
+                                        title="Escolha a data para iniciar a revisão"
+                                    />
+
+                                    <select
+                                        value={plannerSubject}
+                                        onChange={(e) => { setPlannerSubject(e.target.value); setPlannerConcept(''); }}
+                                        className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer"
+                                        title="Escolha a Matéria"
+                                    >
+                                        <option value="">Matéria…</option>
+                                        {subjectOptions.map((s) => (
+                                            <option key={s} value={s}>{s}</option>
+                                        ))}
+                                    </select>
+
+                                    <select
+                                        value={plannerConcept}
+                                        onChange={(e) => setPlannerConcept(e.target.value)}
+                                        className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer"
+                                        disabled={!plannerSubject}
+                                        title="Escolha o Conceito (opcional)"
+                                    >
+                                        <option value="">{plannerSubject ? "Todos os conceitos" : "Conceito…"}</option>
+                                        {plannerConceptOptions.map((c) => (
+                                            <option key={c} value={c}>{c}</option>
+                                        ))}
+                                    </select>
+
+                                    <button
+                                        type="button"
+                                        onClick={addReviewPlan}
+                                        className="text-xs bg-slate-800 text-white hover:bg-medical-700 px-2.5 py-1 rounded-lg font-extrabold transition"
+                                        title="Adicionar esta revisão ao plano (e agendar os cards)"
+                                    >
+                                        + Adicionar
+                                    </button>
+                                </div>
+
+                                <button onClick={handleClearStorage} className="text-xs bg-white border border-red-100 text-red-500 hover:bg-red-50 px-3 py-1.5 rounded-lg font-bold transition">Limpar</button>
+                            </div>
                         </div>
                         <div className="relative group">
                             <input 
@@ -2400,6 +2678,51 @@ const handleStudyAction = (action) => {
                             <svg className="w-4 h-4 text-slate-400 absolute left-3.5 top-3 group-focus-within:text-medical-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
                         </div>
                     </div>
+
+                    {reviewPlans.length > 0 && (
+                        <div className="mt-3 bg-white border border-slate-200 rounded-xl p-3">
+                            <div className="flex items-center justify-between gap-2">
+                                <div className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wide">Revisões agendadas</div>
+                                <button
+                                    type="button"
+                                    onClick={() => setReviewPlans([])}
+                                    className="text-[10px] font-extrabold text-slate-500 hover:text-red-600 transition"
+                                    title="Limpar plano de revisões"
+                                >
+                                    Limpar plano
+                                </button>
+                            </div>
+
+                            <div className="mt-2 flex flex-col gap-2">
+                                {reviewPlans.slice(0, 30).map((p) => (
+                                    <div key={p.id} className="flex items-center justify-between gap-2">
+                                        <div className="text-xs font-bold text-slate-700">
+                                            {new Date(p.date).toLocaleDateString('pt-BR')} • {p.subject}{p.concept ? ` › ${p.concept}` : ''}
+                                        </div>
+                                        <div className="flex items-center gap-1">
+                                            <button
+                                                type="button"
+                                                onClick={() => applyScheduleToCards(p.subject, p.concept, p.date, { reset: true })}
+                                                className="text-[10px] bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-2 py-1 rounded-lg font-extrabold transition"
+                                                title="Aplicar (reiniciar e agendar) novamente"
+                                            >
+                                                ▶
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => removeReviewPlan(p.id)}
+                                                className="text-[10px] bg-white border border-red-100 text-red-600 hover:bg-red-50 px-2 py-1 rounded-lg font-extrabold transition"
+                                                title="Remover do plano"
+                                            >
+                                                🗑
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
                     
                     <div className="p-4 md:p-5 space-y-4 max-h-[500px] overflow-y-auto bg-slate-50/50 custom-scroll">
                         {Object.keys(libraryTree).length === 0 ? (
@@ -2439,28 +2762,53 @@ const handleStudyAction = (action) => {
                                                             className="font-bold text-slate-700 text-sm md:text-base block bg-white border border-slate-200 rounded-lg px-2 py-1 w-[min(320px,70vw)]"
                                                         />
                                                     ) : (
-                                                        <div className="flex items-center gap-2">
-                                                            <span
-                                                                className="font-bold text-slate-700 text-sm md:text-base block"
-                                                                onDoubleClick={(e) => beginRenameSubject(e, subject)}
-                                                                title="Duplo clique para renomear"
-                                                            >
-                                                                {subject}
-                                                            </span>
-                                                            <button
-                                                                type="button"
-                                                                onClick={(e) => { e.stopPropagation(); beginRenameSubject(e, subject); }}
-                                                                className="text-slate-400 hover:text-slate-600 transition-colors"
-                                                                title="Renomear"
-                                                                aria-label="Renomear pasta"
-                                                            >
-                                                                ✏️
-                                                            </button>
-                                                        </div>
+                                                        <span
+                                                            className="font-bold text-slate-700 text-sm md:text-base block"
+                                                            onDoubleClick={(e) => beginRenameSubject(e, subject)}
+                                                            title="Duplo clique para renomear"
+                                                        >
+                                                            {subject}
+                                                        </span>
                                                     )}
                                                     <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">{Object.keys(concepts).length} Conceitos</span>
                                                 </div>
                                             </div>
+
+<div className="flex items-center gap-1.5 pr-2" onClick={(e) => e.stopPropagation()}>
+    <button
+        type="button"
+        onClick={() => promptCreateConcept(subject)}
+        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
+        title="Adicionar Conceito"
+    >
+        ＋
+    </button>
+    <button
+        type="button"
+        onClick={() => deleteSubjectFolder(subject)}
+        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-red-100 bg-white hover:bg-red-50 text-red-500"
+        title="Remover Matéria"
+    >
+        🗑
+    </button>
+    <button
+        type="button"
+        onClick={() => resetSrsForFolder(subject, null, acervoStartDate)}
+        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-amber-100 bg-white hover:bg-amber-50 text-amber-700"
+        title="Agendar revisões para toda a Matéria"
+    >
+        ▶
+    </button>
+    <button
+        type="button"
+        onClick={() => clearSrsForFolder(subject, null, acervoStartDate)}
+        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
+        title="Reiniciar revisões desta Matéria"
+    >
+        ↺
+    </button>
+</div>
+
                                             <svg className={`w-5 h-5 text-slate-400 transition-transform duration-300 ${isSubExpanded ? 'rotate-90 text-blue-500' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
                                         </div>
                                         
@@ -2500,7 +2848,6 @@ const handleStudyAction = (action) => {
                                                                                 className="text-sm font-semibold bg-white border border-slate-200 rounded-lg px-2 py-1 w-[min(320px,60vw)] text-slate-800"
                                                                             />
                                                                         ) : (
-                                                                        <div className="flex items-center gap-2">
                                                                             <span
                                                                                 className={`text-sm font-semibold transition-colors ${isConcExpanded ? 'text-slate-800' : 'text-slate-600'}`}
                                                                                 onDoubleClick={(e) => beginRenameConcept(e, subject, concept)}
@@ -2508,19 +2855,37 @@ const handleStudyAction = (action) => {
                                                                             >
                                                                                 {concept}
                                                                             </span>
-                                                                            <button
-                                                                                type="button"
-                                                                                onClick={(e) => { e.stopPropagation(); beginRenameConcept(e, subject, concept); }}
-                                                                                className="text-slate-400 hover:text-slate-600 transition-colors"
-                                                                                title="Renomear"
-                                                                                aria-label="Renomear pasta"
-                                                                            >
-                                                                                ✏️
-                                                                            </button>
-                                                                        </div>
                                                                         )}
                                                                         <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-md font-bold border border-slate-200">{cards.length}</span>
                                                                     </div>
+
+<div className="flex items-center gap-1.5 pr-1" onClick={(e) => e.stopPropagation()}>
+    <button
+        type="button"
+        onClick={() => resetSrsForFolder(subject, concept, acervoStartDate)}
+        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-amber-100 bg-white hover:bg-amber-50 text-amber-700"
+        title="Agendar revisões para este Conceito"
+    >
+        ▶
+    </button>
+    <button
+        type="button"
+        onClick={() => clearSrsForFolder(subject, concept, acervoStartDate)}
+        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
+        title="Reiniciar revisões deste Conceito"
+    >
+        ↺
+    </button>
+    <button
+        type="button"
+        onClick={() => deleteConceptFolder(subject, concept)}
+        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-red-100 bg-white hover:bg-red-50 text-red-500"
+        title="Remover Conceito"
+    >
+        🗑
+    </button>
+</div>
+
                                                                     <svg className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isConcExpanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
                                                                 </div>
                                                                 
@@ -2759,7 +3124,7 @@ const handleStudyAction = (action) => {
                     </div>
                 </div>
             )}
-        </div>
-    </div>
+            </div>
     );
+    
 }
