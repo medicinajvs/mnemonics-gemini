@@ -105,7 +105,7 @@ const ConfirmModal = ({ isOpen, message, onConfirm, onCancel }) => {
             <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full transform scale-100 transition-all">
                 <h3 className="text-lg font-bold text-slate-800 mb-2">Confirmação</h3>
                 <p className="text-slate-600 mb-6 text-sm">{message}</p>
-                <div className="flex justify-end gap-3">
+                <div className="flex justify-center gap-3">
                     <button onClick={onCancel} className="px-4 py-2 text-slate-500 hover:bg-slate-100 rounded-lg font-bold text-sm transition">Cancelar</button>
                     <button onClick={onConfirm} className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg font-bold text-sm transition shadow-lg shadow-red-500/30">Confirmar</button>
                 </div>
@@ -913,6 +913,27 @@ try {
         setIsLoadingEvents(false);
     };
 
+    // Remove um evento (revisão) do Google Calendar pelo ID
+    const deleteGoogleCalendarEvent = async (eventId, silent = false) => {
+        if (!eventId) return;
+        if (!window.gapi?.client?.getToken()) {
+            if (!silent) showToast('Conecte o Calendar primeiro', 'error');
+            return;
+        }
+        try {
+            await window.gapi.client.calendar.events.delete({
+                calendarId: 'primary',
+                eventId: String(eventId),
+            });
+            if (!silent) showToast('Evento removido do Google Calendar.', 'success');
+            await fetchMonthEvents();
+            fetchUpcomingEvents();
+        } catch (e) {
+            console.error(e);
+            if (!silent) showToast('Erro ao remover evento do Google Calendar.', 'error');
+        }
+    };
+
 
 // --- Review Calendar helpers (UI) ---
 const toISODate = (d) => {
@@ -1490,6 +1511,51 @@ const addFolderToGoogleCalendarFromBase = async (subjectUpper, conceptUpper = nu
         });
     };
 
+    // Limpa o "mostrador" (editor/preview) + revisões do calendário (plano e seleção)
+    const handleClearDisplayAndCalendarRevisions = () => {
+        // Editor
+        setForm({
+            id: null,
+            subject: '',
+            concept: '',
+            question: '',
+            answer: '',
+            image: null,
+            images: [],
+            activeImageId: null,
+            frontTextScale: 1,
+            backTextScale: 1,
+            frontTextOffsetX: 0,
+            frontTextOffsetY: 0,
+            backTextOffsetX: 0,
+            backTextOffsetY: 0,
+            textScale: 1,
+            imageScale: 1,
+            imageOffsetX: 0,
+            imageOffsetY: 0,
+        });
+        setPreviewCard(null);
+
+        // UI/Seleções
+        setEditingSubjectKey(null);
+        setEditingConceptKey(null);
+        setEditNameValue('');
+        setMovingSubjectKey(null);
+        setMovingConceptKey(null);
+
+        // Plano de revisões (Acervo)
+        setReviewPlans([]);
+        try { localStorage.removeItem('acervo_review_plans'); } catch {}
+
+        // Calendário (somente limpeza do mostrador local/cache/seleções)
+        setSelectedCalDay(null);
+        setCalBrushMode(false);
+        setCalBrushSubject('');
+        setCalBrushConcept('');
+        setCalEvents({});
+        setUpcomingEvents([]);
+    };
+
     const cancelEdit = () => {
         setForm({
             id: null,
@@ -1824,9 +1890,26 @@ setCustomFolders(prev => {
     const subjects = { ...(base.subjects || {}) };
     const oldEntry = subjects[oldSubjectUpper];
     if (!oldEntry) return base;
+
     const nextEntry = { ...oldEntry, name: newName };
+
+    // Se este subject tinha pai, mantém referência (mas em UPPERCASE)
+    if (nextEntry.parent) nextEntry.parent = String(nextEntry.parent).toUpperCase();
+
+    // Remove chave antiga e grava chave nova
     delete subjects[oldSubjectUpper];
     subjects[newUpper] = nextEntry;
+
+    // Atualiza referências de "parent" em outros subjects (filhos) que apontavam para o antigo
+    Object.keys(subjects).forEach((k) => {
+        const e = subjects[k];
+        if (!e || !e.parent) return;
+        const p = String(e.parent).toUpperCase();
+        if (p === oldSubjectUpper) {
+            subjects[k] = { ...e, parent: newUpper };
+        }
+    });
+
     return { ...base, subjects };
 });
 
@@ -1951,7 +2034,32 @@ const setSubjectParent = (subjectUpper, parentUpperOrNull) => {
     const parentU = parentUpperOrNull ? String(parentUpperOrNull).toUpperCase() : null;
 
     // Evita auto-loop
-    const safeParent = (parentU && parentU !== subjU) ? parentU : null;
+    let safeParent = (parentU && parentU !== subjU) ? parentU : null;
+
+    // Evita ciclos (ex: A -> B quando B já é filho/descendente de A)
+    try {
+        const subjectsNow = (customFolders?.subjects || {});
+        const getParentOf = (key) => {
+            const e = subjectsNow[key];
+            return e?.parent ? String(e.parent).toUpperCase() : null;
+        };
+        const wouldCreateCycle = (child, candidateParent) => {
+            if (!candidateParent) return false;
+            let p = candidateParent;
+            const seen = new Set();
+            while (p) {
+                if (p === child) return true;
+                if (seen.has(p)) return true;
+                seen.add(p);
+                p = getParentOf(p);
+            }
+            return false;
+        };
+        if (safeParent && wouldCreateCycle(subjU, safeParent)) {
+            safeParent = null;
+            showToast('Movimento inválido: isso criaria um ciclo de pastas.', 'warning');
+        }
+    } catch {}
 
     setCustomFolders(prev => {
         const base = prev || { subjects: {} };
@@ -1959,6 +2067,9 @@ const setSubjectParent = (subjectUpper, parentUpperOrNull) => {
 
         // Garante que exista o subject
         if (!subjects[subjU]) subjects[subjU] = { name: subjU, concepts: {} };
+
+        // Também garante que o pai exista (para evitar parent "solto")
+        if (safeParent && !subjects[safeParent]) subjects[safeParent] = { name: safeParent, concepts: {} };
 
         subjects[subjU] = {
             ...(subjects[subjU] || {}),
@@ -2043,6 +2154,34 @@ const buildNestedSubjectList = () => {
     all.forEach(s => { if (!seen.has(s)) dfs(s, 0); });
 
     return out;
+};
+
+// Mapa de parentesco das Matérias (para controlar visibilidade quando uma Matéria pai é recolhida)
+const subjectParentMap = useMemo(() => {
+    const all = getAllSubjectKeys();
+    const map = {};
+    all.forEach(s => {
+        const entry = (customFolders?.subjects || {})[s];
+        const pRaw = entry?.parent ? String(entry.parent).toUpperCase() : '';
+        const p = pRaw && pRaw !== s ? pRaw : '';
+        map[s] = p || '';
+    });
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [customFolders, libraryTree]);
+
+const isSubjectVisibleByAncestors = (subjectKey) => {
+    // Um filho só é visível se TODOS os ancestrais estiverem expandidos.
+    let cur = String(subjectKey || '').toUpperCase();
+    for (let i = 0; i < 30; i++) {
+        const p = subjectParentMap?.[cur] || '';
+        if (!p) return true;
+        if (p === cur) return true;
+        const parentId = p.replace(/\s/g, '_');
+        if (!expandedSubjects?.[parentId]) return false;
+        cur = p;
+    }
+    return true;
 };
 
 const promptCreateSubject = () => {
@@ -2486,7 +2625,7 @@ const handleStudyAction = (action) => {
                                     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider pl-1">Matéria</label>
                                     <button
                                         type="button"
-                                        onClick={() => setForm((prev) => ({ ...prev, subject: '' }))}
+                                        onClick={handleClearDisplayAndCalendarRevisions}
                                         className="text-[10px] font-extrabold px-2 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600"
                                         title="Limpar"
                                     >
@@ -3208,6 +3347,7 @@ const handleStudyAction = (action) => {
                             <div className="flex flex-col items-center justify-center h-32 text-slate-400 opacity-60"><p>Vazio</p></div>
                         ) : (
                             buildNestedSubjectList().map(({ subject, concepts, depth }) => {
+                                if (!isSubjectVisibleByAncestors(subject)) return null;
                                 const subId = subject.replace(/\s/g, '_');
                                 const isSubExpanded = expandedSubjects[subId];
                                 
@@ -3660,8 +3800,20 @@ const handleStudyAction = (action) => {
                                                             const kind = p?.concept ? 'Conceito' : 'Matéria';
                                                             return (
                                                                 <div key={p.id} className="rounded-xl border border-slate-200 p-3 bg-white">
-                                                                    <div className="text-sm font-extrabold text-slate-800">{title}</div>
-                                                                    <div className="text-xs text-slate-500 font-semibold">{kind}</div>
+                                                                    <div className="flex items-start justify-between gap-3">
+                                                                        <div className="min-w-0">
+                                                                            <div className="text-sm font-extrabold text-slate-800 truncate">{title}</div>
+                                                                            <div className="text-xs text-slate-500 font-semibold">{kind}</div>
+                                                                        </div>
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => handleConfirm('Remover esta revisão do plano local?', () => removeReviewPlan(p.id))}
+                                                                            className="shrink-0 px-2 py-1 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 text-[11px] font-extrabold"
+                                                                            title="Remover do plano"
+                                                                        >
+                                                                            Remover
+                                                                        </button>
+                                                                    </div>
                                                                 </div>
                                                             );
                                                         })}
@@ -3679,9 +3831,21 @@ const handleStudyAction = (action) => {
                                                     <div className="space-y-2 max-h-[180px] overflow-auto pr-1">
                                                         {events.map((ev) => (
                                                             <div key={ev.id} className="rounded-xl border border-slate-200 p-3 bg-white">
-                                                                <div className="text-sm font-extrabold text-slate-800">{ev.summary || "Evento"}</div>
-                                                                <div className="text-xs text-slate-500 font-semibold">
-                                                                    {(ev.start?.dateTime || ev.start?.date || "").replace("T", " ").slice(0, 16)}
+                                                                <div className="flex items-start justify-between gap-3">
+                                                                    <div className="min-w-0">
+                                                                        <div className="text-sm font-extrabold text-slate-800 truncate">{ev.summary || "Evento"}</div>
+                                                                        <div className="text-xs text-slate-500 font-semibold">
+                                                                            {(ev.start?.dateTime || ev.start?.date || "").replace("T", " ").slice(0, 16)}
+                                                                        </div>
+                                                                    </div>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleConfirm('Remover este evento do Google Calendar?', () => deleteGoogleCalendarEvent(ev.id))}
+                                                                        className="shrink-0 px-2 py-1 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 text-[11px] font-extrabold"
+                                                                        title="Remover do Google Calendar"
+                                                                    >
+                                                                        Remover
+                                                                    </button>
                                                                 </div>
                                                             </div>
                                                         ))}
