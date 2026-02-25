@@ -49,6 +49,55 @@ const Toast = ({ message, type, visible }) => (
     </div>
 );
 
+
+
+// ErrorBoundary para evitar "tela preta" em erros inesperados
+class ErrorBoundary extends React.Component {
+    constructor(props) {
+        super(props);
+        this.state = { hasError: false, error: null };
+    }
+    static getDerivedStateFromError(error) {
+        return { hasError: true, error };
+    }
+    componentDidCatch(error, info) {
+        console.error("UI crashed:", error, info);
+    }
+    render() {
+        if (this.state.hasError) {
+            return (
+                <div className="min-h-screen flex items-center justify-center p-6" style={{ background: 'radial-gradient(circle at top left, #f1f5f9, #e2e8f0)' }}>
+                    <div className="w-full max-w-xl bg-white/80 backdrop-blur rounded-3xl shadow-xl border border-slate-200 p-6">
+                        <div className="text-xl font-extrabold text-slate-900">Ops — algo deu errado</div>
+                        <div className="mt-2 text-slate-600">
+                            Para evitar a tela ficar preta, o app entrou em modo seguro. Você pode recarregar a página e continuar.
+                        </div>
+                        <div className="mt-4 flex gap-3">
+                            <button
+                                className="px-4 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 font-semibold"
+                                onClick={() => window.location.reload()}
+                            >
+                                Recarregar
+                            </button>
+                            <button
+                                className="px-4 py-2 rounded-xl bg-slate-900 text-white font-semibold hover:opacity-90"
+                                onClick={() => this.setState({ hasError: false, error: null })}
+                            >
+                                Tentar continuar
+                            </button>
+                        </div>
+                        <details className="mt-4 text-sm text-slate-600">
+                            <summary className="cursor-pointer select-none">Detalhes técnicos</summary>
+                            <pre className="mt-2 whitespace-pre-wrap">{String(this.state.error || '')}</pre>
+                        </details>
+                    </div>
+                </div>
+            );
+        }
+        return this.props.children;
+    }
+}
+
 const ConfirmModal = ({ isOpen, message, onConfirm, onCancel }) => {
     if (!isOpen) return null;
     return (
@@ -127,6 +176,46 @@ useEffect(() => {
     try { localStorage.setItem('acervo_custom_folders', JSON.stringify(customFolders)); } catch {}
 }, [customFolders]);
 
+
+// --- Helpers: nomes exibidos para Matéria/Conceito (evita ReferenceError) ---
+const normKey = (v) => String(v ?? '').trim().toUpperCase();
+
+const getSubjectDisplayName = (subjectAny) => {
+    const raw = String(subjectAny ?? '').trim();
+    if (!raw) return '';
+    const subjObj = customFolders?.subjects || {};
+    // 1) tenta por chave normalizada
+    const byKey = subjObj[normKey(raw)];
+    if (byKey?.name) return String(byKey.name);
+    // 2) tenta encontrar por "name" (case-insensitive)
+    const rawU = normKey(raw);
+    for (const s of Object.values(subjObj)) {
+        const n = String(s?.name ?? '').trim();
+        if (n && normKey(n) === rawU) return n;
+    }
+    // 3) fallback: o próprio valor
+    return raw;
+};
+
+const getConceptDisplayName = (subjectAny, conceptAny) => {
+    const concRaw = String(conceptAny ?? '').trim();
+    if (!concRaw) return '';
+    const subjObj = customFolders?.subjects || {};
+    const subjEntry = subjObj[normKey(String(subjectAny ?? '').trim())] || null;
+
+    const concObj = subjEntry?.concepts || {};
+    // 1) por chave normalizada
+    const byKey = concObj[normKey(concRaw)];
+    if (byKey?.name) return String(byKey.name);
+    // 2) por "name"
+    const concU = normKey(concRaw);
+    for (const c of Object.values(concObj)) {
+        const n = String(c?.name ?? '').trim();
+        if (n && normKey(n) === concU) return n;
+    }
+    // 3) fallback: o próprio valor
+    return concRaw;
+};
 
     
     // --- Planejador de Revisões (Acervo) ---
@@ -296,7 +385,20 @@ const [studySessionDateKey, setStudySessionDateKey] = useState('');
     const [editingConceptKey, setEditingConceptKey] = useState(null); // chave "SUBJECT::CONCEPT" (ambos UPPERCASE)
     const [editNameValue, setEditNameValue] = useState('');
 
+    // Acervo: mover pastas (Matéria/Conceito)
+    const [movingSubjectKey, setMovingSubjectKey] = useState(null);
+    const [movingConceptKey, setMovingConceptKey] = useState(null);
+
+
 // Acervo: pastas personalizadas (Matéria/Conceito) — persistido
+
+
+// Review Calendar (planejador simples por dia -> pasta)
+const [isReviewCalendarOpen, setIsReviewCalendarOpen] = useState(false);
+const [reviewCalDate, setReviewCalDate] = useState(() => new Date());
+const [reviewSelectedDay, setReviewSelectedDay] = useState(() => new Date().toISOString().split('T')[0]); // YYYY-MM-DD
+const [reviewPickSubject, setReviewPickSubject] = useState('');
+const [reviewPickConcept, setReviewPickConcept] = useState(''); // vazio = matéria inteira
 
     // Calendar State
     const [calDate, setCalDate] = useState(new Date());
@@ -304,6 +406,13 @@ const [studySessionDateKey, setStudySessionDateKey] = useState('');
     const [upcomingEvents, setUpcomingEvents] = useState([]);
     const [isLoadingEvents, setIsLoadingEvents] = useState(false);
     const [selectedCalDay, setSelectedCalDay] = useState(null);
+
+
+    // Calendar: modo "pincel" (seleciona pasta e clica no dia para agendar)
+    const [calBrushMode, setCalBrushMode] = useState(false);
+    const [calBrushSubject, setCalBrushSubject] = useState('');
+    const [calBrushConcept, setCalBrushConcept] = useState(''); // vazio = matéria inteira
+
 
     // Preview Modal
     const [previewCard, setPreviewCard] = useState(null);
@@ -391,6 +500,14 @@ const [studySessionDateKey, setStudySessionDateKey] = useState('');
                         try {
                             await window.gapi.client.init({ apiKey: API_KEY, discoveryDocs: [DISCOVERY_DOC] });
                             setIsGapiLoaded(true);
+                            // Restaura token da sessão anterior (enquanto válido)
+                            try {
+                                const exp = Number(localStorage.getItem('google_token_expires_at') || 0);
+                                const tok = localStorage.getItem('google_access_token');
+                                if (!window.gapi.client.getToken() && tok && (!exp || Date.now() < exp)) {
+                                    window.gapi.client.setToken({ access_token: tok });
+                                }
+                            } catch {}
                             if (window.gapi.client.getToken()) {
                                 fetchMonthEvents();
                                 fetchUpcomingEvents();
@@ -432,6 +549,15 @@ useEffect(() => {
 
             tokenClientRef.current.callback = async (resp) => {
                 if (resp?.error) return;
+                try {
+                    const expiresIn = Number(resp.expires_in || resp.expiresIn || 0);
+                    if (expiresIn) localStorage.setItem('google_token_expires_at', String(Date.now() + expiresIn * 1000));
+                    if (resp?.access_token) {
+                        localStorage.setItem('google_access_token', String(resp.access_token));
+                        try { window.gapi?.client?.setToken?.({ access_token: resp.access_token }); } catch {}
+                    }
+                    localStorage.setItem('google_has_token', '1');
+                } catch {}
                 await fetchMonthEvents();
                 fetchUpcomingEvents();
                 fetchUserProfile();
@@ -677,15 +803,43 @@ useEffect(() => {
     };
 
 
+    // Evita "tela preta" por erros não tratados em promises / listeners
+    useEffect(() => {
+        const onErr = (event) => {
+            console.error("Window error:", event?.error || event);
+            try { showToast("Ocorreu um erro inesperado (veja o console).", "error"); } catch {}
+        };
+        const onRej = (event) => {
+            console.error("Unhandled rejection:", event?.reason || event);
+            try { showToast("Falha inesperada (promise).", "error"); } catch {}
+        };
+        window.addEventListener('error', onErr);
+        window.addEventListener('unhandledrejection', onRej);
+        return () => {
+            window.removeEventListener('error', onErr);
+            window.removeEventListener('unhandledrejection', onRej);
+        };
+    }, []);
+
+
+
     // --- GOOGLE API LOGIC ---
 
     const handleAuthClick = () => {
         tokenClientRef.current.callback = async (resp) => {
-            if (resp.error) throw (resp);
+            if (resp?.error) {
+                console.error("Auth error:", resp);
+                showToast("Falha ao conectar ao Google", "error");
+                return;
+            }
 try {
     const expiresIn = Number(resp.expires_in || resp.expiresIn || 0);
     if (expiresIn) {
         localStorage.setItem('google_token_expires_at', String(Date.now() + expiresIn * 1000));
+    }
+    if (resp?.access_token) {
+        localStorage.setItem('google_access_token', String(resp.access_token));
+        try { window.gapi?.client?.setToken?.({ access_token: resp.access_token }); } catch {}
     }
     localStorage.setItem('google_has_token', '1');
 } catch {}
@@ -735,7 +889,7 @@ try {
                 'calendarId': 'primary', 'timeMin': timeMin, 'timeMax': timeMax,
                 'showDeleted': false, 'singleEvents': true, 'q': 'Rev'
             });
-            const events = response.result.items;
+            const events = Array.isArray(response?.result?.items) ? response.result.items : [];
             const cache = {};
             events.forEach(ev => {
                 const date = (ev.start.dateTime || ev.start.date).split('T')[0];
@@ -754,10 +908,40 @@ try {
                 'calendarId': 'primary', 'timeMin': (new Date()).toISOString(), 'showDeleted': false,
                 'singleEvents': true, 'maxResults': 10, 'orderBy': 'startTime', 'q': 'Rev'
             });
-            setUpcomingEvents(response.result.items);
+            setUpcomingEvents(Array.isArray(response?.result?.items) ? response.result.items : []);
         } catch (err) { console.error(err); }
         setIsLoadingEvents(false);
     };
+
+
+// --- Review Calendar helpers (UI) ---
+const toISODate = (d) => {
+    const dt = new Date(d);
+    if (Number.isNaN(dt.getTime())) return '';
+    return dt.toISOString().split('T')[0];
+};
+
+const getMonthMatrix = (baseDate) => {
+    const d = new Date(baseDate);
+    const year = d.getFullYear();
+    const month = d.getMonth();
+    const first = new Date(year, month, 1);
+    const start = new Date(first);
+    start.setDate(first.getDate() - first.getDay()); // domingo como início
+    const weeks = [];
+    for (let w = 0; w < 6; w++) {
+        const week = [];
+        for (let i = 0; i < 7; i++) {
+            const day = new Date(start);
+            day.setDate(start.getDate() + w * 7 + i);
+            week.push(day);
+        }
+        weeks.push(week);
+    }
+    return weeks;
+};
+
+
 
     const addToGoogleCalendar = async (cardId, silent = false) => {
         if (!window.gapi?.client?.getToken()) {
@@ -802,6 +986,145 @@ try {
     };
 
 
+
+    const addFolderToGoogleCalendar = async (subjectUpper, conceptUpper = null, silent = false) => {
+        try {
+            if (!window.gapi?.client) {
+                if (!silent) showToast("Google Calendar não disponível.", "error");
+                return;
+            }
+            if (window.gapi.client.getToken() === null) {
+                if (!silent) showToast("Conecte ao Google Calendar primeiro.", "error");
+                return;
+            }
+
+            const sU = String(subjectUpper || '').toUpperCase();
+            const cU = conceptUpper ? String(conceptUpper || '').toUpperCase() : null;
+
+            const cards = library.filter(card => {
+                const s = String(card.subject || '').toUpperCase();
+                const c = String(card.concept || '').toUpperCase();
+                if (cU) return s === sU && c === cU;
+                return s === sU;
+            });
+
+            const cardCount = cards.length;
+            const sample = cards.slice(0, 5).map((c, i) => `${i + 1}) ${String(c.question || '').slice(0, 140)}`).join("\n");
+
+            const intervals = [1, 3, 7, 14, 30, 60, 90, 120];
+            const batch = window.gapi.client.newBatch();
+
+            intervals.forEach(days => {
+                const date = new Date();
+                date.setDate(date.getDate() + days);
+                const dateStr = date.toISOString().split('T')[0];
+
+                const title = cU ? `🧠 Rev: ${cU} (${sU})` : `🧠 Rev: ${sU}`;
+                const desc = [
+                    `REVISÃO ${days}d`,
+                    ``,
+                    cU ? `Pasta: ${cU} (${sU})` : `Pasta: ${sU}`,
+                    `Cards: ${cardCount}`,
+                    ``,
+                    sample ? `Amostra de perguntas:\n${sample}` : '(sem cards)'
+                ].join("\n");
+
+                batch.add(window.gapi.client.calendar.events.insert({
+                    calendarId: 'primary',
+                    resource: {
+                        summary: title,
+                        description: desc,
+                        start: { date: dateStr },
+                        end: { date: dateStr },
+                        transparency: 'transparent',
+                        reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 540 }] }
+                    }
+                }));
+            });
+
+            await batch.then();
+            if (!silent) showToast("Revisões da pasta adicionadas ao Google Calendar!", "success");
+            await fetchMonthEvents();
+            fetchUpcomingEvents();
+        } catch (err) {
+            console.error(err);
+            if (!silent) showToast("Erro ao adicionar revisões da pasta.", "error");
+        }
+    };
+
+
+// Adiciona revisões da pasta começando a partir de um dia-base (clique no calendário)
+const addFolderToGoogleCalendarFromBase = async (subjectUpper, conceptUpper = null, baseIsoDate, silent = false) => {
+    try {
+        if (!window.gapi?.client) {
+            if (!silent) showToast("Google Calendar não disponível.", "error");
+            return;
+        }
+        if (window.gapi.client.getToken() === null) {
+            if (!silent) showToast("Conecte ao Google Calendar primeiro.", "error");
+            return;
+        }
+        const base = new Date(`${baseIsoDate}T00:00:00`);
+        if (Number.isNaN(base.getTime())) {
+            if (!silent) showToast("Data inválida.", "error");
+            return;
+        }
+
+        const sU = String(subjectUpper || '').toUpperCase();
+        const cU = conceptUpper ? String(conceptUpper || '').toUpperCase() : null;
+
+        const cards = library.filter(card => {
+            const s = String(card.subject || '').toUpperCase();
+            const c = String(card.concept || '').toUpperCase();
+            if (cU) return s === sU && c === cU;
+            return s === sU;
+        });
+
+        const cardCount = cards.length;
+        const sample = cards.slice(0, 5).map((c, i) => `${i + 1}) ${String(c.question || '').slice(0, 140)}`).join("\n");
+
+        // inclui o próprio dia-base como "D0" (mais intuitivo ao clicar no calendário)
+        const intervals = [0, 1, 3, 7, 14, 30, 60, 90, 120];
+        const batch = window.gapi.client.newBatch();
+
+        intervals.forEach(days => {
+            const date = new Date(base);
+            date.setDate(date.getDate() + days);
+            const dateStr = date.toISOString().split('T')[0];
+
+            const title = cU ? `🧠 Rev: ${cU} (${sU})` : `🧠 Rev: ${sU}`;
+            const desc = [
+                `REVISÃO D+${days}`,
+                ``,
+                cU ? `Pasta: ${cU} (${sU})` : `Pasta: ${sU}`,
+                `Cards: ${cardCount}`,
+                ``,
+                sample ? `Amostra de perguntas:\n${sample}` : '(sem cards)'
+            ].join("\n");
+
+            batch.add(window.gapi.client.calendar.events.insert({
+                calendarId: 'primary',
+                resource: {
+                    summary: title,
+                    description: desc,
+                    start: { date: dateStr },
+                    end: { date: dateStr },
+                    transparency: 'transparent',
+                    reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 540 }] }
+                }
+            }));
+        });
+
+        await batch.then();
+        if (!silent) showToast("Revisões da pasta adicionadas ao Google Calendar!", "success");
+        await fetchMonthEvents();
+        fetchUpcomingEvents();
+    } catch (err) {
+        console.error(err);
+        if (!silent) showToast("Erro ao adicionar revisões da pasta.", "error");
+    }
+};
+
     // Agenda UMA revisão (SRS) no dia indicado (não remove eventos antigos — evita mexer no histórico do usuário)
     const scheduleNextSrsReviewEvent = async (card, dateKey, silent = false) => {
         if (!dateKey) return;
@@ -827,6 +1150,51 @@ try {
             fetchUpcomingEvents();
         } catch (err) {
             if (!silent) showToast("Erro ao agendar próxima revisão", "error");
+        }
+    };
+
+
+    // --- Calendário (clique no dia -> agendar pasta) ---
+    const scheduleFolderOnDate = async (isoDate, subjectUpper, conceptUpperOrEmpty) => {
+        const subj = String(subjectUpper || '').trim();
+        const iso = String(isoDate || '').trim();
+        const conc = String(conceptUpperOrEmpty || '').trim();
+        const concOrNull = conc ? conc : null;
+
+        if (!subj || !iso) {
+            showToast("Selecione a pasta e o dia", "error");
+            return;
+        }
+
+        // Sempre registra no plano local + aplica SRS nos cards
+        try {
+            const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+            const subjName = getSubjectDisplayName(subj);
+            const concName = concOrNull ? getConceptDisplayName(subj, concOrNull) : '';
+            setReviewPlans(prev => ([
+                ...prev,
+                { id, date: iso, subject: subjName, concept: concName }
+            ]));
+            applyScheduleToCards(subjName, concName, iso, { reset: true });
+        } catch {}
+
+        // Se conectado, envia para Google Calendar
+        if (window.gapi?.client?.getToken()) {
+            await addFolderToGoogleCalendarFromBase(subj, concOrNull, iso, false);
+        } else {
+            showToast("Agendado localmente (conecte o Calendar para enviar).", "success");
+        }
+    };
+
+    const handleCalDayClick = (day) => {
+        setSelectedCalDay(day);
+        const y = calDate.getFullYear();
+        const m = calDate.getMonth();
+        const dateKey = new Date(y, m, day).toISOString().split('T')[0];
+
+        if (calBrushMode && calBrushSubject) {
+            // fire-and-forget (não bloquear UI do clique)
+            scheduleFolderOnDate(dateKey, calBrushSubject, calBrushConcept);
         }
     };
 
@@ -1415,8 +1783,8 @@ const studyConceptsForSubject = useMemo(() => {
         return Object.keys(conceptsObj);
     }, [libraryTree, studySubject]);
 
-    const toggleSubject = (s) => setExpandedSubjects(prev => ({ ...prev, [s]: !prev[s] }));
-    const toggleConcept = (c) => setExpandedConcepts(prev => ({ ...prev, [c]: !prev[c] }));
+    const toggleSubject = (s) => { setMovingSubjectKey(null); setMovingConceptKey(null); setExpandedSubjects(prev => ({ ...prev, [s]: !prev[s] })); };
+    const toggleConcept = (c) => { setMovingSubjectKey(null); setMovingConceptKey(null); setExpandedConcepts(prev => ({ ...prev, [c]: !prev[c] })); };
 
     // --- Renomear pastas do Acervo ---
     const beginRenameSubject = (e, subjectKeyUpper) => {
@@ -1565,6 +1933,116 @@ const ensureConceptFolder = (subjectUpper, conceptName) => {
         return { ...base, subjects };
     });
     return concKey;
+};
+
+// --- ACERVO: MOVER PASTAS (Matéria/Conceito) ---
+const getAllSubjectKeys = () => {
+    const fromTree = Object.keys(libraryTree || {});
+    const fromCustom = Object.keys((customFolders?.subjects) || {}).map(k => {
+        const entry = customFolders.subjects[k];
+        const nm = (entry?.name || k).toString().trim() || k;
+        return nm.toUpperCase();
+    });
+    return Array.from(new Set([...fromTree, ...fromCustom])).filter(Boolean).sort();
+};
+
+const setSubjectParent = (subjectUpper, parentUpperOrNull) => {
+    const subjU = String(subjectUpper || '').toUpperCase();
+    const parentU = parentUpperOrNull ? String(parentUpperOrNull).toUpperCase() : null;
+
+    // Evita auto-loop
+    const safeParent = (parentU && parentU !== subjU) ? parentU : null;
+
+    setCustomFolders(prev => {
+        const base = prev || { subjects: {} };
+        const subjects = { ...(base.subjects || {}) };
+
+        // Garante que exista o subject
+        if (!subjects[subjU]) subjects[subjU] = { name: subjU, concepts: {} };
+
+        subjects[subjU] = {
+            ...(subjects[subjU] || {}),
+            name: (subjects[subjU]?.name || subjU),
+            concepts: { ...((subjects[subjU] || {}).concepts || {}) },
+            parent: safeParent
+        };
+
+        return { ...base, subjects };
+    });
+};
+
+const moveConceptToSubject = (fromSubjectUpper, conceptUpper, toSubjectUpper) => {
+    const fromU = String(fromSubjectUpper || '').toUpperCase();
+    const concU = String(conceptUpper || '').toUpperCase();
+    const toU = String(toSubjectUpper || '').toUpperCase();
+    if (!fromU || !concU || !toU) return;
+    if (fromU === toU) return;
+
+    // Move cards
+    setLibrary(prev => prev.map(card => {
+        const s = String(card.subject || '').toUpperCase();
+        const c = String(card.concept || '').toUpperCase();
+        if (s === fromU && c === concU) return { ...card, subject: toU };
+        return card;
+    }));
+
+    // Move pasta personalizada (se existir)
+    setCustomFolders(prev => {
+        const base = prev || { subjects: {} };
+        const subjects = { ...(base.subjects || {}) };
+
+        if (!subjects[fromU]) subjects[fromU] = { name: fromU, concepts: {} };
+        if (!subjects[toU]) subjects[toU] = { name: toU, concepts: {} };
+
+        const fromConcepts = { ...((subjects[fromU] || {}).concepts || {}) };
+        const toConcepts = { ...((subjects[toU] || {}).concepts || {}) };
+
+        const moving = fromConcepts[concU] || { name: concU };
+        delete fromConcepts[concU];
+        toConcepts[concU] = moving;
+
+        subjects[fromU] = { ...(subjects[fromU] || {}), concepts: fromConcepts };
+        subjects[toU] = { ...(subjects[toU] || {}), concepts: toConcepts };
+
+        return { ...base, subjects };
+    });
+};
+
+const buildNestedSubjectList = () => {
+    // Retorna [{subject, concepts, depth}]
+    const all = getAllSubjectKeys();
+    const parentMap = {};
+    all.forEach(s => {
+        const entry = (customFolders?.subjects || {})[s];
+        const p = entry?.parent ? String(entry.parent).toUpperCase() : null;
+        parentMap[s] = (p && p !== s) ? p : null;
+    });
+
+    const children = {};
+    all.forEach(s => { children[s] = []; });
+    all.forEach(s => {
+        const p = parentMap[s];
+        if (p && children[p]) children[p].push(s);
+    });
+    Object.keys(children).forEach(k => children[k].sort());
+
+    const roots = all.filter(s => !parentMap[s] || !children[parentMap[s]]);
+    roots.sort();
+
+    const out = [];
+    const seen = new Set();
+
+    const dfs = (s, depth) => {
+        if (seen.has(s)) return;
+        seen.add(s);
+        out.push({ subject: s, concepts: libraryTree?.[s] || {}, depth });
+        (children[s] || []).forEach(ch => dfs(ch, Math.min(depth + 1, 6)));
+    };
+
+    roots.forEach(r => dfs(r, 0));
+    all.forEach(s => { if (!seen.has(s)) dfs(s, 0); });
+
+    return out;
 };
 
 const promptCreateSubject = () => {
@@ -1821,6 +2299,7 @@ const handleStudyAction = (action) => {
     // --- RENDER ---
 
     return (
+        <ErrorBoundary>
         <div className="pb-20 text-slate-800 font-sans min-h-screen relative overflow-x-hidden" style={{ background: 'radial-gradient(circle at top left, #f1f5f9, #e2e8f0)' }}>
             
             {/* CSS GLOBALS FOR CARDS & MOBILE RESET */}
@@ -1964,9 +2443,9 @@ const handleStudyAction = (action) => {
                                 </div>
                             )}
                         </div>
-                    </div>
-                </div>
-            </nav>
+</div>
+</div>
+</nav>
 
             {/* AUTO FLASHCARDS (abaixo do header, alinhado ao layout full-width do site) */}
             <div className="w-full px-4 sm:px-6 lg:px-8 mb-8">
@@ -2728,12 +3207,12 @@ const handleStudyAction = (action) => {
                         {Object.keys(libraryTree).length === 0 ? (
                             <div className="flex flex-col items-center justify-center h-32 text-slate-400 opacity-60"><p>Vazio</p></div>
                         ) : (
-                            Object.entries(libraryTree).map(([subject, concepts]) => {
+                            buildNestedSubjectList().map(({ subject, concepts, depth }) => {
                                 const subId = subject.replace(/\s/g, '_');
                                 const isSubExpanded = expandedSubjects[subId];
                                 
                                 return (
-                                    <div key={subject} className="bg-white rounded-2xl shadow-sm border border-slate-200/60 overflow-hidden transition-all duration-300 hover:shadow-md group">
+                                    <div key={subject} style={{ marginLeft: depth * 14 }} className="bg-white rounded-2xl shadow-sm border border-slate-200/60 overflow-hidden transition-all duration-300 hover:shadow-md group">
                                         {/* PASTA MATÉRIA */}
                                         <div 
                                             className={`px-4 py-3.5 flex justify-between items-center cursor-pointer transition-colors ${isSubExpanded ? 'bg-slate-50' : 'bg-white hover:bg-slate-50'}`} 
@@ -2790,6 +3269,39 @@ const handleStudyAction = (action) => {
         title="Remover Matéria"
     >
         🗑
+    </button>
+    <button
+        type="button"
+        onClick={() => { setMovingSubjectKey(subject); setMovingConceptKey(null); }}
+        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
+        title="Mover esta Matéria para dentro de outra"
+    >
+        ↪
+    </button>
+    {movingSubjectKey === subject && (
+        <select
+            value={((customFolders?.subjects || {})[subject]?.parent || '')}
+            onChange={(e) => { 
+                const v = e.target.value || '';
+                setSubjectParent(subject, v || null);
+                setMovingSubjectKey(null);
+            }}
+            className="text-[11px] px-2 py-1 rounded-lg font-bold border border-slate-200 bg-white text-slate-700 max-w-[220px]"
+            title="Escolha a pasta pai (raiz ou outra Matéria)"
+        >
+            <option value="">(raiz)</option>
+            {getAllSubjectKeys().filter(s => s !== subject).map(s => (
+                <option key={s} value={s}>{s}</option>
+            ))}
+        </select>
+    )}
+    <button
+        type="button"
+        onClick={() => addFolderToGoogleCalendar(subject, null)}
+        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-emerald-100 bg-white hover:bg-emerald-50 text-emerald-700"
+        title="Adicionar revisões desta Matéria ao Google Calendar"
+    >
+        📅
     </button>
     <button
         type="button"
@@ -2868,6 +3380,38 @@ const handleStudyAction = (action) => {
     >
         ▶
     </button>
+    <button
+        type="button"
+        onClick={() => addFolderToGoogleCalendar(subject, concept)}
+        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-emerald-100 bg-white hover:bg-emerald-50 text-emerald-700"
+        title="Adicionar revisões deste Conceito ao Google Calendar"
+    >
+        📅
+    </button>
+    <button
+        type="button"
+        onClick={() => { setMovingConceptKey(`${subject}::${concept}`); setMovingSubjectKey(null); }}
+        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
+        title="Mover este Conceito para outra Matéria"
+    >
+        ↪
+    </button>
+    {movingConceptKey === `${subject}::${concept}` && (
+        <select
+            defaultValue={subject}
+            onChange={(e) => {
+                const v = e.target.value || '';
+                if (v) moveConceptToSubject(subject, concept, v);
+                setMovingConceptKey(null);
+            }}
+            className="text-[11px] px-2 py-1 rounded-lg font-bold border border-slate-200 bg-white text-slate-700 max-w-[220px]"
+            title="Escolha a Matéria de destino"
+        >
+            {getAllSubjectKeys().filter(s => s !== subject).map(s => (
+                <option key={s} value={s}>{s}</option>
+            ))}
+        </select>
+    )}
     <button
         type="button"
         onClick={() => clearSrsForFolder(subject, concept, acervoStartDate)}
@@ -2990,7 +3534,7 @@ const handleStudyAction = (action) => {
                                             <button
                                                 key={idx}
                                                 type="button"
-                                                onClick={() => setSelectedCalDay(day)}
+                                                onClick={() => handleCalDayClick(day)}
                                                 className={[
                                                     "h-12 md:h-14 rounded-xl border text-sm font-extrabold transition relative",
                                                     isSelected ? "bg-medical-600 text-white border-slate-900" : "bg-white hover:bg-slate-50 border-slate-200 text-slate-800"
@@ -3023,24 +3567,129 @@ const handleStudyAction = (action) => {
                                     </button>
                                 </div>
 
+
+                                {/* Agendamento rápido (clique no dia) */}
+                                <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                                    <div className="flex items-center justify-between gap-3 mb-3">
+                                        <label className="flex items-center gap-2 text-xs font-extrabold text-slate-700 select-none">
+                                            <input
+                                                type="checkbox"
+                                                checked={calBrushMode}
+                                                onChange={(e) => setCalBrushMode(e.target.checked)}
+                                            />
+                                            Modo 1-clique (seleciona pasta e clica no dia)
+                                        </label>
+                                        <button
+                                            type="button"
+                                            onClick={() => { setCalBrushSubject(''); setCalBrushConcept(''); }}
+                                            className="text-[11px] font-extrabold text-slate-600 hover:text-slate-900"
+                                            title="Limpar seleção"
+                                        >
+                                            Limpar
+                                        </button>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                        <select
+                                            value={calBrushSubject}
+                                            onChange={(e) => { setCalBrushSubject(e.target.value); setCalBrushConcept(''); }}
+                                            className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-slate-800"
+                                        >
+                                            <option value="">Selecione a Matéria</option>
+                                            {Object.keys(libraryTree || {}).sort().map((s) => (
+                                                <option key={s} value={s}>{getSubjectDisplayName(s)}</option>
+                                            ))}
+                                        </select>
+
+                                        <select
+                                            value={calBrushConcept}
+                                            onChange={(e) => setCalBrushConcept(e.target.value)}
+                                            disabled={!calBrushSubject}
+                                            className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-slate-800 disabled:opacity-60"
+                                        >
+                                            <option value="">{calBrushSubject ? "Matéria inteira (opcional)" : "Selecione uma matéria primeiro"}</option>
+                                            {calBrushSubject && Object.keys(libraryTree?.[calBrushSubject] || {}).sort().map((c) => (
+                                                <option key={c} value={c}>{getConceptDisplayName(calBrushSubject, c)}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div className="mt-3">
+                                        <button
+                                            type="button"
+                                            disabled={!selectedCalDay || !calBrushSubject}
+                                            onClick={() => {
+                                                if (!selectedCalDay) return;
+                                                const y = calDate.getFullYear();
+                                                const m = calDate.getMonth();
+                                                const dateKey = new Date(y, m, selectedCalDay).toISOString().split('T')[0];
+                                                scheduleFolderOnDate(dateKey, calBrushSubject, calBrushConcept);
+                                            }}
+                                            className="w-full bg-medical-600 hover:bg-medical-700 disabled:opacity-50 text-white px-4 py-3 rounded-2xl font-extrabold text-sm transition"
+                                            title="Agenda D0, D+1,3,7,14,30,60,90,120"
+                                        >
+                                            {selectedCalDay ? "Agendar revisões para este dia" : "Selecione um dia"}
+                                        </button>
+                                        <div className="mt-2 text-[11px] text-slate-500 font-semibold">
+                                            Dica: ative o <b>Modo 1-clique</b> e depois só vá clicando nos dias.
+                                        </div>
+                                    </div>
+                                </div>
+
+
                                 {selectedCalDay ? (() => {
                                     const y = calDate.getFullYear();
                                     const m = calDate.getMonth();
                                     const dateKey = new Date(y, m, selectedCalDay).toISOString().split('T')[0];
+
                                     const events = calEvents?.[dateKey] || [];
-                                    if (!events.length) {
-                                        return <div className="text-sm text-slate-500 font-semibold">Sem eventos “Rev” neste dia.</div>;
+                                    const plans = (reviewPlans || []).filter((p) => p?.date === dateKey);
+
+                                    if (!events.length && !plans.length) {
+                                        return <div className="text-sm text-slate-500 font-semibold">Sem revisões neste dia.</div>;
                                     }
+
                                     return (
-                                        <div className="space-y-2 max-h-[320px] overflow-auto pr-1">
-                                            {events.map((ev) => (
-                                                <div key={ev.id} className="rounded-xl border border-slate-200 p-3">
-                                                    <div className="text-sm font-extrabold text-slate-800">{ev.summary || "Evento"}</div>
-                                                    <div className="text-xs text-slate-500 font-semibold">
-                                                        {(ev.start?.dateTime || ev.start?.date || "").replace("T", " ").slice(0, 16)}
+                                        <div className="space-y-3">
+                                            <div>
+                                                <div className="text-xs font-extrabold text-slate-600 mb-2">Revisões marcadas</div>
+                                                {plans.length ? (
+                                                    <div className="space-y-2 max-h-[180px] overflow-auto pr-1">
+                                                        {plans.map((p) => {
+                                                            const title = p?.concept ? `${p.concept} — ${p.subject}` : (p?.subject || 'Revisão');
+                                                            const kind = p?.concept ? 'Conceito' : 'Matéria';
+                                                            return (
+                                                                <div key={p.id} className="rounded-xl border border-slate-200 p-3 bg-white">
+                                                                    <div className="text-sm font-extrabold text-slate-800">{title}</div>
+                                                                    <div className="text-xs text-slate-500 font-semibold">{kind}</div>
+                                                                </div>
+                                                            );
+                                                        })}
                                                     </div>
-                                                </div>
-                                            ))}
+                                                ) : (
+                                                    <div className="text-sm text-slate-500 font-semibold">Nenhuma revisão do acervo marcada para este dia.</div>
+                                                )}
+                                            </div>
+
+                                            <div className="h-px bg-slate-200/70" />
+
+                                            <div>
+                                                <div className="text-xs font-extrabold text-slate-600 mb-2">Eventos no Google Calendar</div>
+                                                {events.length ? (
+                                                    <div className="space-y-2 max-h-[180px] overflow-auto pr-1">
+                                                        {events.map((ev) => (
+                                                            <div key={ev.id} className="rounded-xl border border-slate-200 p-3 bg-white">
+                                                                <div className="text-sm font-extrabold text-slate-800">{ev.summary || "Evento"}</div>
+                                                                <div className="text-xs text-slate-500 font-semibold">
+                                                                    {(ev.start?.dateTime || ev.start?.date || "").replace("T", " ").slice(0, 16)}
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ) : (
+                                                    <div className="text-sm text-slate-500 font-semibold">Sem eventos “Rev” neste dia.</div>
+                                                )}
+                                            </div>
                                         </div>
                                     );
                                 })() : (
@@ -3125,6 +3774,7 @@ const handleStudyAction = (action) => {
                 </div>
             )}
             </div>
+        </ErrorBoundary>
     );
     
 }
