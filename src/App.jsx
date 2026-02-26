@@ -934,6 +934,57 @@ try {
     };
 
 
+    // Remove do Google Calendar todos os eventos de revisão gerados para um Tema/Conceito
+    const deleteFolderGoogleCalendarEvents = async (subjectUpper, conceptUpper = null, silent = false) => {
+        if (!window.gapi?.client?.getToken()) {
+            if (!silent) showToast('Conecte o Calendar primeiro', 'error');
+            return;
+        }
+
+        const sU = String(subjectUpper || '').toUpperCase();
+        const cU = conceptUpper ? String(conceptUpper || '').toUpperCase() : null;
+        const title = cU ? `🧠 Rev: ${cU} (${sU})` : `🧠 Rev: ${sU}`;
+
+        // Janela ampla (1 ano) para não depender do mês visível
+        const timeMin = new Date(); timeMin.setDate(timeMin.getDate() - 1);
+        const timeMax = new Date(); timeMax.setFullYear(timeMax.getFullYear() + 1);
+
+        try {
+            const listRes = await window.gapi.client.calendar.events.list({
+                calendarId: 'primary',
+                q: title,
+                singleEvents: true,
+                timeMin: timeMin.toISOString(),
+                timeMax: timeMax.toISOString(),
+                maxResults: 2500,
+            });
+
+            const items = (listRes?.result?.items || []).filter(ev => String(ev?.summary || '').trim() === title);
+            if (!items.length) {
+                if (!silent) showToast('Nenhum evento encontrado para remover.', 'info');
+                return;
+            }
+
+            const batch = window.gapi.client.newBatch();
+            items.forEach((ev) => {
+                if (!ev?.id) return;
+                batch.add(window.gapi.client.calendar.events.delete({
+                    calendarId: 'primary',
+                    eventId: String(ev.id),
+                }));
+            });
+
+            await batch.then();
+            if (!silent) showToast('Revisões removidas do Google Calendar.', 'success');
+            await fetchMonthEvents();
+            fetchUpcomingEvents();
+        } catch (e) {
+            console.error(e);
+            if (!silent) showToast('Erro ao remover revisões do Google Calendar.', 'error');
+        }
+    };
+
+
 // --- Review Calendar helpers (UI) ---
 const toISODate = (d) => {
     const dt = new Date(d);
@@ -963,29 +1014,48 @@ const getMonthMatrix = (baseDate) => {
 
 
 
-    const addToGoogleCalendar = async (cardId, silent = false) => {
+    const addToGoogleCalendar = async (cardId, startDateKey = null, silent = false) => {
         if (!window.gapi?.client?.getToken()) {
             if (!silent) showToast("Conecte o Calendar primeiro", "error");
-            return;
+            return [];
         }
         const card = library.find(c => c.id === cardId);
-        if (!card) return;
+        if (!card) return [];
 
         let colorId = '9';
-        const mat = card.subject.toLowerCase();
+        const mat = String(card.subject || '').toLowerCase();
         if (mat.includes('cardio') || mat.includes('urg')) colorId = '11';
         else if (mat.includes('neuro') || mat.includes('psiq')) colorId = '3';
         else if (mat.includes('pediatria')) colorId = '5';
         else if (mat.includes('gineco')) colorId = '4';
 
-        // Lógica de Repetição Espaçada: D1, D3, D7, D14, D30, D60, D90, D120
-        const intervals = [1, 3, 7, 14, 30, 60, 90, 120];
+        const pad2 = (n) => String(n).padStart(2, '0');
+        const normalizeDateKey = (v) => {
+            const s = String(v || '').trim();
+            return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+        };
+        const todayKey = () => {
+            const d = new Date();
+            return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+        };
+        const addDays = (baseKey, days) => {
+            const k = normalizeDateKey(baseKey) || todayKey();
+            const [y, mo, da] = k.split('-').map(n => parseInt(n, 10));
+            const dt = new Date(y, (mo || 1) - 1, da || 1);
+            dt.setDate(dt.getDate() + (Number(days) || 0));
+            return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+        };
+
+        // 8 revisões começando NO dia escolhido: D0, D1, D3, D7, D14, D30, D60, D90
+        const baseKey = normalizeDateKey(startDateKey) || normalizeDateKey(card?.srsDue) || todayKey();
+        const intervals = [0, 1, 3, 7, 14, 30, 60, 90];
+
         const batch = window.gapi.client.newBatch();
-        
+        const createdEventIds = [];
+
         intervals.forEach(days => {
-            const date = new Date(); date.setDate(date.getDate() + days);
-            const dateStr = date.toISOString().split('T')[0];
-            batch.add(window.gapi.client.calendar.events.insert({
+            const dateStr = addDays(baseKey, days);
+            const req = window.gapi.client.calendar.events.insert({
                 'calendarId': 'primary',
                 'resource': {
                     'summary': `🧠 Rev: ${card.concept} (${card.subject})`,
@@ -994,7 +1064,12 @@ const getMonthMatrix = (baseDate) => {
                     'colorId': colorId, 'transparency': 'transparent',
                     'reminders': { 'useDefault': false, 'overrides': [{ 'method': 'popup', 'minutes': 540 }] }
                 }
-            }));
+            });
+
+            // Captura IDs para permitir remoção futura
+            batch.add(req, (resp) => {
+                if (resp && resp.id) createdEventIds.push(resp.id);
+            });
         });
 
         try {
@@ -1002,21 +1077,43 @@ const getMonthMatrix = (baseDate) => {
             if (!silent) showToast("Revisões agendadas!", "success");
             await fetchMonthEvents();
             fetchUpcomingEvents();
-        } catch (err) { if (!silent) showToast("Erro ao agendar", "error"); }
+            return createdEventIds;
+        } catch (err) {
+            console.error(err);
+            if (!silent) showToast("Erro ao agendar", "error");
+            return [];
+        }
     };
 
 
 
-    const addFolderToGoogleCalendar = async (subjectUpper, conceptUpper = null, silent = false) => {
+    const addFolderToGoogleCalendar = async (subjectUpper, conceptUpper = null, startDateKey = null, silent = false) => {
         try {
             if (!window.gapi?.client) {
                 if (!silent) showToast("Google Calendar não disponível.", "error");
-                return;
+                return [];
             }
             if (window.gapi.client.getToken() === null) {
                 if (!silent) showToast("Conecte ao Google Calendar primeiro.", "error");
-                return;
+                return [];
             }
+
+            const pad2 = (n) => String(n).padStart(2, '0');
+            const normalizeDateKey = (v) => {
+                const s = String(v || '').trim();
+                return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+            };
+            const todayKey = () => {
+                const d = new Date();
+                return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+            };
+            const addDays = (baseKey, days) => {
+                const k = normalizeDateKey(baseKey) || todayKey();
+                const [y, mo, da] = k.split('-').map(n => parseInt(n, 10));
+                const dt = new Date(y, (mo || 1) - 1, da || 1);
+                dt.setDate(dt.getDate() + (Number(days) || 0));
+                return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+            };
 
             const sU = String(subjectUpper || '').toUpperCase();
             const cU = conceptUpper ? String(conceptUpper || '').toUpperCase() : null;
@@ -1031,13 +1128,15 @@ const getMonthMatrix = (baseDate) => {
             const cardCount = cards.length;
             const sample = cards.slice(0, 5).map((c, i) => `${i + 1}) ${String(c.question || '').slice(0, 140)}`).join("\n");
 
-            const intervals = [1, 3, 7, 14, 30, 60, 90, 120];
+            // 8 revisões começando NO dia escolhido: D0, D1, D3, D7, D14, D30, D60, D90
+            const baseKey = normalizeDateKey(startDateKey) || todayKey();
+            const intervals = [0, 1, 3, 7, 14, 30, 60, 90];
+
             const batch = window.gapi.client.newBatch();
+            const createdEventIds = [];
 
             intervals.forEach(days => {
-                const date = new Date();
-                date.setDate(date.getDate() + days);
-                const dateStr = date.toISOString().split('T')[0];
+                const dateStr = addDays(baseKey, days);
 
                 const title = cU ? `🧠 Rev: ${cU} (${sU})` : `🧠 Rev: ${sU}`;
                 const desc = [
@@ -1049,7 +1148,7 @@ const getMonthMatrix = (baseDate) => {
                     sample ? `Amostra de perguntas:\n${sample}` : '(sem cards)'
                 ].join("\n");
 
-                batch.add(window.gapi.client.calendar.events.insert({
+                const req = window.gapi.client.calendar.events.insert({
                     calendarId: 'primary',
                     resource: {
                         summary: title,
@@ -1059,16 +1158,22 @@ const getMonthMatrix = (baseDate) => {
                         transparency: 'transparent',
                         reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 540 }] }
                     }
-                }));
+                });
+
+                batch.add(req, (resp) => {
+                    if (resp && resp.id) createdEventIds.push(resp.id);
+                });
             });
 
             await batch.then();
             if (!silent) showToast("Revisões da pasta adicionadas ao Google Calendar!", "success");
             await fetchMonthEvents();
             fetchUpcomingEvents();
+            return createdEventIds;
         } catch (err) {
             console.error(err);
             if (!silent) showToast("Erro ao adicionar revisões da pasta.", "error");
+            return [];
         }
     };
 
@@ -1273,7 +1378,7 @@ const addFolderToGoogleCalendarFromBase = async (subjectUpper, conceptUpper = nu
             const fileBaseRaw = (file?.name || '').replace(/\.[^.]+$/, '').trim();
             const fileBase = fileBaseRaw.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
             const defaultSubject = (fileBase || 'Importado').trim();
-            const defaultConcept = 'Geral';
+            const defaultConcept = 'Flashcards';
 
             const now = Date.now();
             const newCards = items.map((it, idx) => {
@@ -1360,7 +1465,7 @@ const addFolderToGoogleCalendarFromBase = async (subjectUpper, conceptUpper = nu
             }
 
             const defaultSubject = (resolvedOrigin || 'Importado').trim();
-            const defaultConcept = 'Geral';
+            const defaultConcept = 'Flashcards';
 
             const now = Date.now();
             const newCards = items.map((it, idx) => {
@@ -2301,7 +2406,7 @@ const promptScheduleRevisionsForFolder = (subjectUpper, conceptUpper) => {
 
     // Google Calendar (se conectado)
     try {
-        addFolderToGoogleCalendar(subjectUpper, conceptUpper);
+        addFolderToGoogleCalendar(subjectUpper, conceptUpper, dateKey);
     } catch {}
 };
 
@@ -2326,6 +2431,9 @@ const promptClearRevisionsForFolder = (subjectUpper, conceptUpper) => {
         if (conc && c !== conc) return card;
         return { ...card, srsDue: null };
     }));
+
+    // Remove também do Google Calendar (se conectado)
+    try { deleteFolderGoogleCalendarEvents(subjectUpper, conceptUpper, true); } catch {}
 
     showToast('Revisões canceladas', 'success');
 };
@@ -3193,7 +3301,7 @@ const handleStudyAction = (action) => {
                                 <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                                     <span className="bg-indigo-100 text-indigo-600 p-1.5 rounded-lg">📚</span> Acervo
                                 </h2>
-                                <p className="text-[10px] text-slate-500 mt-0.5 font-medium uppercase tracking-wide">Matéria &gt Conceito &gt Cards • Clique para expandir</p>
+                                <p className="text-[10px] text-slate-500 mt-0.5 font-medium uppercase tracking-wide">Matéria</p>
                             </div>
                             
 
