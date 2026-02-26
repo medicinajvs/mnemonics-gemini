@@ -295,6 +295,51 @@ const getConceptDisplayName = (subjectAny, conceptAny) => {
         setReviewPlans((prev) => prev.filter((p) => p.id !== id));
     };
 
+    // --- ACERVO: LIMPAR REVISÕES AGENDADAS (PLANO) POR PASTA/CONCEITO ---
+    const clearReviewPlansForSubject = (subjectName) => {
+        const subjKey = normKey(subjectName);
+        if (!subjKey) return;
+        const ok = window.confirm(`Limpar TODAS as revisões agendadas da matéria "${subjectName}"?`);
+        if (!ok) return;
+
+        // Remove entradas do plano de revisões
+        setReviewPlans((prev) => (prev || []).filter((p) => normKey(p?.subject) !== subjKey));
+
+        // Limpa srsDue dos cards dessa matéria
+        setLibrary((prev) => (prev || []).map((c) => {
+            if (normKey(c?.subject) !== subjKey) return c;
+            if (c?.srsDue == null) return c;
+            return { ...c, srsDue: null };
+        }));
+
+        showToast(`Revisões da matéria "${subjectName}" foram limpas`, 'success');
+    };
+
+    const clearReviewPlansForConcept = (subjectName, conceptName) => {
+        const subjKey = normKey(subjectName);
+        const concKey = normKey(conceptName);
+        if (!subjKey || !concKey) return;
+        const ok = window.confirm(`Limpar TODAS as revisões agendadas do conceito "${conceptName}" (matéria "${subjectName}")?`);
+        if (!ok) return;
+
+        // Remove somente as entradas do plano que são desse conceito
+        setReviewPlans((prev) => (prev || []).filter((p) => {
+            if (normKey(p?.subject) !== subjKey) return true;
+            return normKey(p?.concept) !== concKey;
+        }));
+
+        // Limpa srsDue dos cards desse conceito
+        setLibrary((prev) => (prev || []).map((c) => {
+            if (normKey(c?.subject) !== subjKey) return c;
+            if (normKey(c?.concept) !== concKey) return c;
+            if (c?.srsDue == null) return c;
+            return { ...c, srsDue: null };
+        }));
+
+        showToast(`Revisões do conceito "${conceptName}" foram limpas`, 'success');
+    };
+
+
     const plannerConceptOptions = useMemo(() => {
         const subj = (plannerSubject || '').toString().trim();
         if (!subj) return [];
@@ -2201,7 +2246,7 @@ const promptCreateConcept = (subjectUpper) => {
 
 const deleteSubjectFolder = (subjectUpper) => {
     const subjKey = String(subjectUpper || '').toUpperCase();
-    const ok = confirm(`Remover a matéria "${subjectUpper}"?\n\nIsso remove a pasta do Acervo. Os cards dessa matéria também serão removidos do Acervo.`);
+    const ok = window.confirm(`Remover a matéria "${subjectUpper}"?\n\nIsso remove a pasta do Acervo. Os cards dessa matéria também serão removidos do Acervo.`);
     if (!ok) return;
 
     setCustomFolders(prev => {
@@ -2224,7 +2269,7 @@ const deleteSubjectFolder = (subjectUpper) => {
 const deleteConceptFolder = (subjectUpper, conceptUpper) => {
     const subjKey = String(subjectUpper || '').toUpperCase();
     const concKey = String(conceptUpper || '').toUpperCase();
-    const ok = confirm(`Remover o conceito "${conceptUpper}" da matéria "${subjectUpper}"?\n\nOs cards desse conceito também serão removidos do Acervo.`);
+    const ok = window.confirm(`Remover o conceito "${conceptUpper}" da matéria "${subjectUpper}"?\n\nOs cards desse conceito também serão removidos do Acervo.`);
     if (!ok) return;
 
     setCustomFolders(prev => {
@@ -3412,6 +3457,14 @@ const handleStudyAction = (action) => {
     </button>
     <button
         type="button"
+        onClick={() => clearReviewPlansForSubject(subject)}
+        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-amber-200 bg-white hover:bg-amber-50 text-amber-700"
+        title="Limpar revisões agendadas desta Matéria"
+    >
+        🗑 Revisões
+    </button>
+    <button
+        type="button"
         onClick={() => { setMovingSubjectKey(subject); setMovingConceptKey(null); }}
         className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
         title="Mover esta Matéria para dentro de outra"
@@ -3559,6 +3612,15 @@ const handleStudyAction = (action) => {
         title="Reiniciar revisões deste Conceito"
     >
         ↺
+    </button>
+
+    <button
+        type="button"
+        onClick={() => clearReviewPlansForConcept(subject, concept)}
+        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-amber-200 bg-white hover:bg-amber-50 text-amber-700"
+        title="Limpar revisões agendadas deste Conceito"
+    >
+        🗑 Revisões
     </button>
     <button
         type="button"
