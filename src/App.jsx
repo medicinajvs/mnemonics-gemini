@@ -295,51 +295,6 @@ const getConceptDisplayName = (subjectAny, conceptAny) => {
         setReviewPlans((prev) => prev.filter((p) => p.id !== id));
     };
 
-    // --- ACERVO: LIMPAR REVISÕES AGENDADAS (PLANO) POR PASTA/CONCEITO ---
-    const clearReviewPlansForSubject = (subjectName) => {
-        const subjKey = normKey(subjectName);
-        if (!subjKey) return;
-        const ok = window.confirm(`Limpar TODAS as revisões agendadas da matéria "${subjectName}"?`);
-        if (!ok) return;
-
-        // Remove entradas do plano de revisões
-        setReviewPlans((prev) => (prev || []).filter((p) => normKey(p?.subject) !== subjKey));
-
-        // Limpa srsDue dos cards dessa matéria
-        setLibrary((prev) => (prev || []).map((c) => {
-            if (normKey(c?.subject) !== subjKey) return c;
-            if (c?.srsDue == null) return c;
-            return { ...c, srsDue: null };
-        }));
-
-        showToast(`Revisões da matéria "${subjectName}" foram limpas`, 'success');
-    };
-
-    const clearReviewPlansForConcept = (subjectName, conceptName) => {
-        const subjKey = normKey(subjectName);
-        const concKey = normKey(conceptName);
-        if (!subjKey || !concKey) return;
-        const ok = window.confirm(`Limpar TODAS as revisões agendadas do conceito "${conceptName}" (matéria "${subjectName}")?`);
-        if (!ok) return;
-
-        // Remove somente as entradas do plano que são desse conceito
-        setReviewPlans((prev) => (prev || []).filter((p) => {
-            if (normKey(p?.subject) !== subjKey) return true;
-            return normKey(p?.concept) !== concKey;
-        }));
-
-        // Limpa srsDue dos cards desse conceito
-        setLibrary((prev) => (prev || []).map((c) => {
-            if (normKey(c?.subject) !== subjKey) return c;
-            if (normKey(c?.concept) !== concKey) return c;
-            if (c?.srsDue == null) return c;
-            return { ...c, srsDue: null };
-        }));
-
-        showToast(`Revisões do conceito "${conceptName}" foram limpas`, 'success');
-    };
-
-
     const plannerConceptOptions = useMemo(() => {
         const subj = (plannerSubject || '').toString().trim();
         if (!subj) return [];
@@ -406,8 +361,7 @@ return Array.from(set).sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity:
     
     
     // Study (Treino) Section State
-    const [isLearningModeModalOpen, setIsLearningModeModalOpen] = useState(false);
-    const [studyMode, setStudyMode] = useState('free'); // 'free' | 'spaced'
+const studyMode = 'free'; // simplificado: apenas treino livre
     const [isStudyFiltersOpen, setIsStudyFiltersOpen] = useState(false);
     const [studySubject, setStudySubject] = useState('');
     const [studyConcept, setStudyConcept] = useState('');
@@ -2246,7 +2200,7 @@ const promptCreateConcept = (subjectUpper) => {
 
 const deleteSubjectFolder = (subjectUpper) => {
     const subjKey = String(subjectUpper || '').toUpperCase();
-    const ok = window.confirm(`Remover a matéria "${subjectUpper}"?\n\nIsso remove a pasta do Acervo. Os cards dessa matéria também serão removidos do Acervo.`);
+    const ok = confirm(`Remover a matéria "${subjectUpper}"?\n\nIsso remove a pasta do Acervo. Os cards dessa matéria também serão removidos do Acervo.`);
     if (!ok) return;
 
     setCustomFolders(prev => {
@@ -2269,7 +2223,7 @@ const deleteSubjectFolder = (subjectUpper) => {
 const deleteConceptFolder = (subjectUpper, conceptUpper) => {
     const subjKey = String(subjectUpper || '').toUpperCase();
     const concKey = String(conceptUpper || '').toUpperCase();
-    const ok = window.confirm(`Remover o conceito "${conceptUpper}" da matéria "${subjectUpper}"?\n\nOs cards desse conceito também serão removidos do Acervo.`);
+    const ok = confirm(`Remover o conceito "${conceptUpper}" da matéria "${subjectUpper}"?\n\nOs cards desse conceito também serão removidos do Acervo.`);
     if (!ok) return;
 
     setCustomFolders(prev => {
@@ -2314,6 +2268,66 @@ const clearSrsForFolder = (subjectUpper, conceptUpper, dueDateKey) => {
     // Nesta versão, "reiniciar" = zerar progresso e re-agendar a partir da data escolhida
     resetSrsForFolder(subjectUpper, conceptUpper, dueDateKey);
     showToast('Reiniciado e agendado', 'success');
+};
+
+
+// --- Revisões em 1 clique (Tema/Conceito) ---
+const promptScheduleRevisionsForFolder = (subjectUpper, conceptUpper) => {
+    const todayKey = new Date();
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const today = `${todayKey.getFullYear()}-${pad2(todayKey.getMonth()+1)}-${pad2(todayKey.getDate())}`;
+
+    const input = window.prompt('Data de início das revisões (AAAA-MM-DD):', today);
+    if (!input) return;
+
+    const dateKey = String(input).trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+        showToast('Data inválida. Use AAAA-MM-DD.', 'error');
+        return;
+    }
+
+    // Agenda no sistema (SRS)
+    resetSrsForFolder(subjectUpper, conceptUpper, dateKey);
+
+    // Registra no plano local (para exibição/organização)
+    const subj = String(subjectUpper || '').toUpperCase();
+    const conc = conceptUpper ? String(conceptUpper || '').toUpperCase() : '';
+    setReviewPlans((prev) => {
+        const id = `${subj}::${conc}::${dateKey}`;
+        const exists = prev.some((p) => p.id === id);
+        if (exists) return prev;
+        return [...prev, { id, subject: subj, concept: conc, date: dateKey }];
+    });
+
+    // Google Calendar (se conectado)
+    try {
+        addFolderToGoogleCalendar(subjectUpper, conceptUpper);
+    } catch {}
+};
+
+const promptClearRevisionsForFolder = (subjectUpper, conceptUpper) => {
+    const subj = String(subjectUpper || '').toUpperCase();
+    const conc = conceptUpper ? String(conceptUpper || '').toUpperCase() : '';
+
+    if (!window.confirm(`Cancelar TODAS as revisões agendadas deste Tema?\n\n${subj}${conc ? ' • ' + conc : ''}`)) return;
+
+    // Remove do plano local
+    setReviewPlans((prev) => prev.filter((p) => {
+        const ps = String(p.subject || '').toUpperCase();
+        const pc = String(p.concept || '').toUpperCase();
+        return !(ps === subj && pc === conc);
+    }));
+
+    // Remove o "due" dos cards (sem resetar progresso)
+    setLibrary((prev) => prev.map((card) => {
+        const s = String(card?.subject || '').toUpperCase();
+        const c = String(card?.concept || '').toUpperCase();
+        if (s !== subj) return card;
+        if (conc && c !== conc) return card;
+        return { ...card, srsDue: null };
+    }));
+
+    showToast('Revisões canceladas', 'success');
 };
 
 const shuffleArray = (arr) => {
@@ -2746,18 +2760,12 @@ const handleStudyAction = (action) => {
                                     <span className="bg-amber-100 text-amber-700 p-1.5 rounded-lg">🧠</span> Estudo
                                 </h2>
                                 <p className="text-[10px] text-slate-500 mt-0.5 font-medium uppercase tracking-wide">
-                                    Modo livre ou revisão espaçada • Filtre por Matéria &gt; Conceito
+                                    Escolha um tema para estudar.
                                 </p>
                             </div>
 
                             <div className="flex flex-wrap gap-2">
-                                <button
-                                    type="button"
-                                    onClick={() => setIsLearningModeModalOpen(true)}
-                                    className="text-xs px-3 py-2 rounded-xl font-extrabold transition border bg-medical-600 text-white border-slate-900 hover:bg-medical-700"
-                                >
-                                    Modo: {studyMode === 'free' ? 'Treino livre' : 'Revisão espaçada'}
-                                </button>
+                                
 
                                 <button
                                     type="button"
@@ -2848,72 +2856,7 @@ const handleStudyAction = (action) => {
             </div>
 
             {/* MODAL: MODO DE APRENDIZADO (UI baseada no index.html) */}
-            {isLearningModeModalOpen && (
-                <div className="fixed inset-0 bg-medical-600 hover:bg-medical-700/70 flex items-center justify-center p-4 z-50">
-                    <div className="bg-[#1E1E1E] border border-[#2D2D2D] rounded-2xl p-6 md:p-8 w-full max-w-lg relative text-white">
-                        <button
-                            onClick={() => setIsLearningModeModalOpen(false)}
-                            className="absolute top-5 right-5 text-gray-400 hover:text-white"
-                            aria-label="Fechar"
-                            type="button"
-                        >
-                            ✕
-                        </button>
-
-                        <h2 className="text-2xl font-extrabold mb-6">Modo de aprendizado</h2>
-
-                        <div className="space-y-4">
-                            <button
-                                type="button"
-                                onClick={() => { setStudyMode('spaced'); setIsLearningModeModalOpen(false); }}
-                                className={`w-full text-left border rounded-xl p-5 flex gap-4 items-start transition ${
-                                    studyMode === 'spaced' ? 'border-[#D98E73] bg-white/5' : 'border-gray-700 hover:bg-white/5'
-                                }`}
-                            >
-                                <div className="bg-[#D98E73] bg-opacity-20 text-[#D98E73] rounded-lg p-3">⟳</div>
-                                <div className="flex-1">
-                                    <div className="flex justify-between items-center">
-                                        <h3 className="font-extrabold text-lg">Revisão espaçada</h3>
-                                        <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${
-                                            studyMode === 'spaced' ? 'border-[#D98E73]' : 'border-gray-500'
-                                        }`}>
-                                            {studyMode === 'spaced' ? <span className="text-[#D98E73] text-sm">●</span> : null}
-                                        </div>
-                                    </div>
-                                    <p className="text-gray-400 mt-2 text-sm leading-relaxed">
-                                        (Fase 2) Sincronizado com o calendário para revisar no momento certo.
-                                    </p>
-                                </div>
-                            </button>
-
-                            <button
-                                type="button"
-                                onClick={() => { setStudyMode('free'); setIsLearningModeModalOpen(false); }}
-                                className={`w-full text-left border rounded-xl p-5 flex gap-4 items-start transition ${
-                                    studyMode === 'free' ? 'border-[#D98E73] bg-white/5' : 'border-gray-700 hover:bg-white/5'
-                                }`}
-                            >
-                                <div className="bg-[#D98E73] bg-opacity-20 text-[#D98E73] rounded-lg p-3">⚡</div>
-                                <div className="flex-1">
-                                    <div className="flex justify-between items-center">
-                                        <h3 className="font-extrabold text-lg">Treino livre</h3>
-                                        <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${
-                                            studyMode === 'free' ? 'border-[#D98E73]' : 'border-gray-500'
-                                        }`}>
-                                            {studyMode === 'free' ? <span className="text-[#D98E73] text-sm">●</span> : null}
-                                        </div>
-                                    </div>
-                                    <p className="text-gray-400 mt-2 text-sm leading-relaxed">
-                                        Você escolhe os temas que quer revisar, no seu ritmo.
-                                    </p>
-                                </div>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* MODAL: FILTROS (Matéria &gt; Conceito) */}
+            {/* MODAL: FILTROS (Matéria > Tema) */}
             {isStudyFiltersOpen && (
                 <div className="fixed inset-0 bg-medical-600 hover:bg-medical-700/70 flex items-center justify-center p-4 z-50">
                     <div className="bg-white rounded-3xl w-full max-w-4xl shadow-2xl overflow-hidden border border-slate-200">
@@ -3252,83 +3195,8 @@ const handleStudyAction = (action) => {
                                 </h2>
                                 <p className="text-[10px] text-slate-500 mt-0.5 font-medium uppercase tracking-wide">Matéria &gt Conceito &gt Cards • Clique para expandir</p>
                             </div>
-                            <div className="flex items-center gap-2 flex-wrap justify-end">
-                                <button
-                                    type="button"
-                                    onClick={promptCreateSubject}
-                                    className="text-xs bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1"
-                                    title="Criar nova Matéria"
-                                >
-                                    <span className="text-sm leading-none">＋</span> Matéria
-                                </button>
+                            
 
-                                <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-2 py-1.5">
-                                    <span className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wide">Início</span>
-                                    <input
-                                        type="date"
-                                        value={acervoStartDate || ""}
-                                        onChange={(e) => setAcervoStartDate(e.target.value)}
-                                        onClick={(e) => {
-                                            // Em alguns navegadores (ou com CSS apertado), o picker não abre ao clicar no texto.
-                                            // showPicker() é suportado em Chromium (Chrome/Edge/Opera).
-                                            e.currentTarget.showPicker?.();
-                                        }}
-                                        className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer"
-                                        style={{ minWidth: 140, pointerEvents: "auto" }}
-                                    />
-                                </div>
-
-                                {/* Planejar revisões por data (Matéria/Conceito) */}
-                                <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-2 py-1.5 flex-wrap">
-                                    <span className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wide">Planejar</span>
-
-                                    <input
-                                        type="date"
-                                        value={plannerDate || ""}
-                                        onChange={(e) => setPlannerDate(e.target.value)}
-                                        onClick={(e) => { e.currentTarget.showPicker?.(); }}
-                                        className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer"
-                                        style={{ minWidth: 140, pointerEvents: "auto" }}
-                                        title="Escolha a data para iniciar a revisão"
-                                    />
-
-                                    <select
-                                        value={plannerSubject}
-                                        onChange={(e) => { setPlannerSubject(e.target.value); setPlannerConcept(''); }}
-                                        className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer"
-                                        title="Escolha a Matéria"
-                                    >
-                                        <option value="">Matéria…</option>
-                                        {subjectOptions.map((s) => (
-                                            <option key={s} value={s}>{s}</option>
-                                        ))}
-                                    </select>
-
-                                    <select
-                                        value={plannerConcept}
-                                        onChange={(e) => setPlannerConcept(e.target.value)}
-                                        className="text-xs font-bold text-slate-700 bg-transparent outline-none cursor-pointer"
-                                        disabled={!plannerSubject}
-                                        title="Escolha o Conceito (opcional)"
-                                    >
-                                        <option value="">{plannerSubject ? "Todos os conceitos" : "Conceito…"}</option>
-                                        {plannerConceptOptions.map((c) => (
-                                            <option key={c} value={c}>{c}</option>
-                                        ))}
-                                    </select>
-
-                                    <button
-                                        type="button"
-                                        onClick={addReviewPlan}
-                                        className="text-xs bg-slate-800 text-white hover:bg-medical-700 px-2.5 py-1 rounded-lg font-extrabold transition"
-                                        title="Adicionar esta revisão ao plano (e agendar os cards)"
-                                    >
-                                        + Adicionar
-                                    </button>
-                                </div>
-
-                                <button onClick={handleClearStorage} className="text-xs bg-white border border-red-100 text-red-500 hover:bg-red-50 px-3 py-1.5 rounded-lg font-bold transition">Limpar</button>
-                            </div>
                         </div>
                         <div className="relative group">
                             <input 
@@ -3342,49 +3210,7 @@ const handleStudyAction = (action) => {
                         </div>
                     </div>
 
-                    {reviewPlans.length > 0 && (
-                        <div className="mt-3 bg-white border border-slate-200 rounded-xl p-3">
-                            <div className="flex items-center justify-between gap-2">
-                                <div className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wide">Revisões agendadas</div>
-                                <button
-                                    type="button"
-                                    onClick={() => setReviewPlans([])}
-                                    className="text-[10px] font-extrabold text-slate-500 hover:text-red-600 transition"
-                                    title="Limpar plano de revisões"
-                                >
-                                    Limpar plano
-                                </button>
-                            </div>
-
-                            <div className="mt-2 flex flex-col gap-2">
-                                {reviewPlans.slice(0, 30).map((p) => (
-                                    <div key={p.id} className="flex items-center justify-between gap-2">
-                                        <div className="text-xs font-bold text-slate-700">
-                                            {new Date(p.date).toLocaleDateString('pt-BR')} • {p.subject}{p.concept ? ` › ${p.concept}` : ''}
-                                        </div>
-                                        <div className="flex items-center gap-1">
-                                            <button
-                                                type="button"
-                                                onClick={() => applyScheduleToCards(p.subject, p.concept, p.date, { reset: true })}
-                                                className="text-[10px] bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-2 py-1 rounded-lg font-extrabold transition"
-                                                title="Aplicar (reiniciar e agendar) novamente"
-                                            >
-                                                ▶
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => removeReviewPlan(p.id)}
-                                                className="text-[10px] bg-white border border-red-100 text-red-600 hover:bg-red-50 px-2 py-1 rounded-lg font-extrabold transition"
-                                                title="Remover do plano"
-                                            >
-                                                🗑
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
+                    
 
                     
                     <div className="p-4 md:p-5 space-y-4 max-h-[500px] overflow-y-auto bg-slate-50/50 custom-scroll">
@@ -3426,15 +3252,25 @@ const handleStudyAction = (action) => {
                                                             className="font-bold text-slate-700 text-sm md:text-base block bg-white border border-slate-200 rounded-lg px-2 py-1 w-[min(320px,70vw)]"
                                                         />
                                                     ) : (
-                                                        <span
-                                                            className="font-bold text-slate-700 text-sm md:text-base block"
-                                                            onDoubleClick={(e) => beginRenameSubject(e, subject)}
-                                                            title="Duplo clique para renomear"
-                                                        >
-                                                            {subject}
-                                                        </span>
+                                                        <div className="flex items-center gap-2">
+                                                            <span
+                                                                className="font-bold text-slate-700 text-sm md:text-base block"
+                                                                onDoubleClick={(e) => beginRenameSubject(e, subject)}
+                                                                title="Duplo clique para renomear"
+                                                            >
+                                                                {subject}
+                                                            </span>
+                                                            <button
+                                                                type="button"
+                                                                onClick={(e) => beginRenameSubject(e, subject)}
+                                                                className="ml-1 p-1 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition"
+                                                                title="Renomear pasta"
+                                                            >
+                                                                ✏️
+                                                            </button>
+                                                        </div>
                                                     )}
-                                                    <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">{Object.keys(concepts).length} Conceitos</span>
+                                                    <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">{Object.keys(concepts).length} Flashcards</span>
                                                 </div>
                                             </div>
 
@@ -3454,63 +3290,6 @@ const handleStudyAction = (action) => {
         title="Remover Matéria"
     >
         🗑
-    </button>
-    <button
-        type="button"
-        onClick={() => clearReviewPlansForSubject(subject)}
-        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-amber-200 bg-white hover:bg-amber-50 text-amber-700"
-        title="Limpar revisões agendadas desta Matéria"
-    >
-        🗑 Revisões
-    </button>
-    <button
-        type="button"
-        onClick={() => { setMovingSubjectKey(subject); setMovingConceptKey(null); }}
-        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
-        title="Mover esta Matéria para dentro de outra"
-    >
-        ↪
-    </button>
-    {movingSubjectKey === subject && (
-        <select
-            value={((customFolders?.subjects || {})[subject]?.parent || '')}
-            onChange={(e) => { 
-                const v = e.target.value || '';
-                setSubjectParent(subject, v || null);
-                setMovingSubjectKey(null);
-            }}
-            className="text-[11px] px-2 py-1 rounded-lg font-bold border border-slate-200 bg-white text-slate-700 max-w-[220px]"
-            title="Escolha a pasta pai (raiz ou outra Matéria)"
-        >
-            <option value="">(raiz)</option>
-            {getAllSubjectKeys().filter(s => s !== subject).map(s => (
-                <option key={s} value={s}>{s}</option>
-            ))}
-        </select>
-    )}
-    <button
-        type="button"
-        onClick={() => addFolderToGoogleCalendar(subject, null)}
-        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-emerald-100 bg-white hover:bg-emerald-50 text-emerald-700"
-        title="Adicionar revisões desta Matéria ao Google Calendar"
-    >
-        📅
-    </button>
-    <button
-        type="button"
-        onClick={() => resetSrsForFolder(subject, null, acervoStartDate)}
-        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-amber-100 bg-white hover:bg-amber-50 text-amber-700"
-        title="Agendar revisões para toda a Matéria"
-    >
-        ▶
-    </button>
-    <button
-        type="button"
-        onClick={() => clearSrsForFolder(subject, null, acervoStartDate)}
-        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
-        title="Reiniciar revisões desta Matéria"
-    >
-        ↺
     </button>
 </div>
 
@@ -3553,6 +3332,7 @@ const handleStudyAction = (action) => {
                                                                                 className="text-sm font-semibold bg-white border border-slate-200 rounded-lg px-2 py-1 w-[min(320px,60vw)] text-slate-800"
                                                                             />
                                                                         ) : (
+                                                                            <div className="flex items-center gap-2">
                                                                             <span
                                                                                 className={`text-sm font-semibold transition-colors ${isConcExpanded ? 'text-slate-800' : 'text-slate-600'}`}
                                                                                 onDoubleClick={(e) => beginRenameConcept(e, subject, concept)}
@@ -3560,6 +3340,15 @@ const handleStudyAction = (action) => {
                                                                             >
                                                                                 {concept}
                                                                             </span>
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={(e) => beginRenameConcept(e, subject, concept)}
+                                                                                className="p-1 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition"
+                                                                                title="Renomear pasta"
+                                                                            >
+                                                                                ✏️
+                                                                            </button>
+                                                                        </div>
                                                                         )}
                                                                         <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-md font-bold border border-slate-200">{cards.length}</span>
                                                                     </div>
@@ -3567,66 +3356,25 @@ const handleStudyAction = (action) => {
 <div className="flex items-center gap-1.5 pr-1" onClick={(e) => e.stopPropagation()}>
     <button
         type="button"
-        onClick={() => resetSrsForFolder(subject, concept, acervoStartDate)}
+        onClick={() => promptScheduleRevisionsForFolder(subject, concept)}
         className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-amber-100 bg-white hover:bg-amber-50 text-amber-700"
-        title="Agendar revisões para este Conceito"
+        title="Agendar revisões (escolha a data de início)"
     >
-        ▶
+        🗓 Revisões
     </button>
     <button
         type="button"
-        onClick={() => addFolderToGoogleCalendar(subject, concept)}
-        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-emerald-100 bg-white hover:bg-emerald-50 text-emerald-700"
-        title="Adicionar revisões deste Conceito ao Google Calendar"
-    >
-        📅
-    </button>
-    <button
-        type="button"
-        onClick={() => { setMovingConceptKey(`${subject}::${concept}`); setMovingSubjectKey(null); }}
+        onClick={() => promptClearRevisionsForFolder(subject, concept)}
         className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
-        title="Mover este Conceito para outra Matéria"
+        title="Cancelar todas as revisões agendadas deste Tema"
     >
-        ↪
-    </button>
-    {movingConceptKey === `${subject}::${concept}` && (
-        <select
-            defaultValue={subject}
-            onChange={(e) => {
-                const v = e.target.value || '';
-                if (v) moveConceptToSubject(subject, concept, v);
-                setMovingConceptKey(null);
-            }}
-            className="text-[11px] px-2 py-1 rounded-lg font-bold border border-slate-200 bg-white text-slate-700 max-w-[220px]"
-            title="Escolha a Matéria de destino"
-        >
-            {getAllSubjectKeys().filter(s => s !== subject).map(s => (
-                <option key={s} value={s}>{s}</option>
-            ))}
-        </select>
-    )}
-    <button
-        type="button"
-        onClick={() => clearSrsForFolder(subject, concept, acervoStartDate)}
-        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
-        title="Reiniciar revisões deste Conceito"
-    >
-        ↺
-    </button>
-
-    <button
-        type="button"
-        onClick={() => clearReviewPlansForConcept(subject, concept)}
-        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-amber-200 bg-white hover:bg-amber-50 text-amber-700"
-        title="Limpar revisões agendadas deste Conceito"
-    >
-        🗑 Revisões
+        🧹 Cancelar
     </button>
     <button
         type="button"
         onClick={() => deleteConceptFolder(subject, concept)}
         className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-red-100 bg-white hover:bg-red-50 text-red-500"
-        title="Remover Conceito"
+        title="Remover Tema"
     >
         🗑
     </button>
