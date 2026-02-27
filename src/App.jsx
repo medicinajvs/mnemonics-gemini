@@ -1059,7 +1059,7 @@ const getMonthMatrix = (baseDate) => {
                 'calendarId': 'primary',
                 'resource': {
                     'summary': `🧠 Rev: ${card.concept} (${card.subject})`,
-                    'description': `REVISÃO ${days}d\n\n[P] ${card.question}\n\n[R] ${card.answer}`,
+                    'description': `REVISÃO D${days === 0 ? '0 (10–20 min)' : String(days)}\n\n[P] ${card.question}\n\n[R] ${card.answer}`,
                     'start': { 'date': dateStr }, 'end': { 'date': dateStr },
                     'colorId': colorId, 'transparency': 'transparent',
                     'reminders': { 'useDefault': false, 'overrides': [{ 'method': 'popup', 'minutes': 540 }] }
@@ -1140,7 +1140,7 @@ const getMonthMatrix = (baseDate) => {
 
                 const title = cU ? `🧠 Rev: ${cU} (${sU})` : `🧠 Rev: ${sU}`;
                 const desc = [
-                    `REVISÃO ${days}d`,
+                    `REVISÃO D${days === 0 ? '0 (10–20 min)' : String(days)}`,
                     ``,
                     cU ? `Pasta: ${cU} (${sU})` : `Pasta: ${sU}`,
                     `Cards: ${cardCount}`,
@@ -1209,7 +1209,7 @@ const addFolderToGoogleCalendarFromBase = async (subjectUpper, conceptUpper = nu
         const sample = cards.slice(0, 5).map((c, i) => `${i + 1}) ${String(c.question || '').slice(0, 140)}`).join("\n");
 
         // inclui o próprio dia-base como "D0" (mais intuitivo ao clicar no calendário)
-        const intervals = [0, 1, 3, 7, 14, 30, 60, 90, 120];
+        const intervals = [0, 1, 3, 7, 14, 30, 60, 90];
         const batch = window.gapi.client.newBatch();
 
         intervals.forEach(days => {
@@ -1219,7 +1219,7 @@ const addFolderToGoogleCalendarFromBase = async (subjectUpper, conceptUpper = nu
 
             const title = cU ? `🧠 Rev: ${cU} (${sU})` : `🧠 Rev: ${sU}`;
             const desc = [
-                `REVISÃO D+${days}`,
+                `REVISÃO D${days === 0 ? '0 (10–20 min)' : String(days)}`,
                 ``,
                 cU ? `Pasta: ${cU} (${sU})` : `Pasta: ${sU}`,
                 `Cards: ${cardCount}`,
@@ -2410,13 +2410,11 @@ const promptScheduleRevisionsForFolder = (subjectUpper, conceptUpper) => {
     } catch {}
 };
 
-const promptClearRevisionsForFolder = (subjectUpper, conceptUpper) => {
+const clearRevisionsForFolder = async (subjectUpper, conceptUpper, { silent = false } = {}) => {
     const subj = String(subjectUpper || '').toUpperCase();
     const conc = conceptUpper ? String(conceptUpper || '').toUpperCase() : '';
 
-    if (!window.confirm(`Cancelar TODAS as revisões agendadas deste Tema?\n\n${subj}${conc ? ' • ' + conc : ''}`)) return;
-
-    // Remove do plano local
+    // Remove do plano local (todas as datas)
     setReviewPlans((prev) => prev.filter((p) => {
         const ps = String(p.subject || '').toUpperCase();
         const pc = String(p.concept || '').toUpperCase();
@@ -2433,10 +2431,23 @@ const promptClearRevisionsForFolder = (subjectUpper, conceptUpper) => {
     }));
 
     // Remove também do Google Calendar (se conectado)
-    try { deleteFolderGoogleCalendarEvents(subjectUpper, conceptUpper, true); } catch {}
+    if (window.gapi?.client?.getToken()) {
+        try { await deleteFolderGoogleCalendarEvents(subjectUpper, conceptUpper, true); } catch {}
+    }
 
-    showToast('Revisões canceladas', 'success');
+    if (!silent) showToast('Revisões canceladas', 'success');
 };
+
+const promptClearRevisionsForFolder = (subjectUpper, conceptUpper) => {
+    const subj = String(subjectUpper || '').toUpperCase();
+    const conc = conceptUpper ? String(conceptUpper || '').toUpperCase() : '';
+
+    if (!window.confirm(`Cancelar TODAS as revisões agendadas deste Tema?
+
+${subj}${conc ? ' • ' + conc : ''}`)) return;
+    clearRevisionsForFolder(subjectUpper, conceptUpper, { silent: false });
+};
+
 
 const shuffleArray = (arr) => {
     const a = [...arr];
@@ -3378,7 +3389,7 @@ const handleStudyAction = (action) => {
                                                             </button>
                                                         </div>
                                                     )}
-                                                    <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">{Object.keys(concepts).length} Flashcards</span>
+                                                    <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">{Object.keys(concepts).length} Conceito{Object.keys(concepts).length === 1 ? "" : "s"}</span>
                                                 </div>
                                             </div>
 
@@ -3462,23 +3473,7 @@ const handleStudyAction = (action) => {
                                                                     </div>
 
 <div className="flex items-center gap-1.5 pr-1" onClick={(e) => e.stopPropagation()}>
-    <button
-        type="button"
-        onClick={() => promptScheduleRevisionsForFolder(subject, concept)}
-        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-amber-100 bg-white hover:bg-amber-50 text-amber-700"
-        title="Agendar revisões (escolha a data de início)"
-    >
-        🗓 Revisões
-    </button>
-    <button
-        type="button"
-        onClick={() => promptClearRevisionsForFolder(subject, concept)}
-        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
-        title="Cancelar todas as revisões agendadas deste Tema"
-    >
-        🧹 Cancelar
-    </button>
-    <button
+<button
         type="button"
         onClick={() => deleteConceptFolder(subject, concept)}
         className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-red-100 bg-white hover:bg-red-50 text-red-500"
@@ -3673,21 +3668,45 @@ const handleStudyAction = (action) => {
                                     </div>
 
                                     <div className="mt-3">
-                                        <button
-                                            type="button"
-                                            disabled={!selectedCalDay || !calBrushSubject}
-                                            onClick={() => {
-                                                if (!selectedCalDay) return;
-                                                const y = calDate.getFullYear();
-                                                const m = calDate.getMonth();
-                                                const dateKey = new Date(y, m, selectedCalDay).toISOString().split('T')[0];
-                                                scheduleFolderOnDate(dateKey, calBrushSubject, calBrushConcept);
-                                            }}
-                                            className="w-full bg-medical-600 hover:bg-medical-700 disabled:opacity-50 text-white px-4 py-3 rounded-2xl font-extrabold text-sm transition"
-                                            title="Agenda D0, D+1,3,7,14,30,60,90,120"
-                                        >
-                                            {selectedCalDay ? "Agendar revisões para este dia" : "Selecione um dia"}
-                                        </button>
+                                        <div className="flex gap-2">
+                                            <button
+                                                type="button"
+                                                disabled={!selectedCalDay || !calBrushSubject}
+                                                onClick={() => {
+                                                    if (!selectedCalDay) return;
+                                                    const y = calDate.getFullYear();
+                                                    const m = calDate.getMonth();
+                                                    const dateKey = new Date(y, m, selectedCalDay).toISOString().split('T')[0];
+                                                    scheduleFolderOnDate(dateKey, calBrushSubject, calBrushConcept);
+                                                }}
+                                                className="flex-1 bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 text-slate-800 px-4 py-3 rounded-2xl font-extrabold text-sm transition flex items-center justify-center gap-2"
+                                                title="Agendar D0, D1, D3, D7, D14, D30, D60, D90"
+                                            >
+                                                <span className="text-base">🗓</span> Revisões
+                                            </button>
+
+                                            <button
+                                                type="button"
+                                                disabled={!calBrushSubject}
+                                                onClick={() => {
+                                                    const subj = calBrushSubject;
+                                                    const conc = calBrushConcept || null;
+                                                    const label = conc ? `${getConceptDisplayName(subj, conc)} (${getSubjectDisplayName(subj)})` : getSubjectDisplayName(subj);
+                                                    handleConfirm(`Cancelar TODAS as revisões desta pasta?
+
+${label}`, async () => {
+                                                        await clearRevisionsForFolder(subj, conc, { silent: false });
+                                                        await fetchMonthEvents();
+                                                        fetchUpcomingEvents();
+                                                    });
+                                                }}
+                                                className="flex-1 bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 text-slate-800 px-4 py-3 rounded-2xl font-extrabold text-sm transition flex items-center justify-center gap-2"
+                                                title="Cancelar revisões desta pasta"
+                                            >
+                                                <span className="text-base">🧹</span> Cancelar
+                                            </button>
+                                        </div>
+
                                         <div className="mt-2 text-[11px] text-slate-500 font-semibold">
                                             Dica: ative o <b>Modo 1-clique</b> e depois só vá clicando nos dias.
                                         </div>
