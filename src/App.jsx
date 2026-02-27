@@ -3314,7 +3314,16 @@ const handleStudyAction = (action) => {
                                 </h2>
                                 <p className="text-[10px] text-slate-500 mt-0.5 font-medium uppercase tracking-wide">Matéria</p>
                             </div>
-                            
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={promptCreateSubject}
+                                    className="text-[11px] px-3 py-1.5 rounded-xl font-extrabold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
+                                    title="Adicionar Matéria"
+                                >
+                                    Matéria
+                                </button>
+                            </div>
 
                         </div>
                         <div className="relative group">
