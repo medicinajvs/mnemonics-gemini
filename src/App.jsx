@@ -2521,22 +2521,68 @@ const promptScheduleRevisionsForFolder = (subjectUpper, conceptUpper) => {
 };
 
 const clearRevisionsForFolder = async (subjectUpper, conceptUpper, { silent = false } = {}) => {
-    const subj = String(subjectUpper || '').toUpperCase();
-    const conc = conceptUpper ? String(conceptUpper || '').toUpperCase() : '';
+    const subjKey = String(subjectUpper || '').trim().toUpperCase();
+    const concKey = conceptUpper ? String(conceptUpper || '').trim().toUpperCase() : '';
 
-    // Remove do plano local (todas as datas)
+    // Resolve chaves mesmo quando o plano local guardou nomes "bonitos" (ou renomeados)
+    const resolveSubjectKeyFromAny = (val) => {
+        const v = String(val || '').trim();
+        if (!v) return '';
+        const u = v.toUpperCase();
+
+        // 1) Já é uma chave conhecida
+        const known = new Set([
+            ...Object.keys(libraryTree || {}).map(s => String(s).toUpperCase()),
+            ...Object.keys(customFolders?.subjects || {}).map(s => String(s).toUpperCase()),
+        ]);
+        if (known.has(u)) return u;
+
+        // 2) Tenta bater por displayName (nome exibido)
+        for (const s of known) {
+            try {
+                const disp = String(getSubjectDisplayName(s) || '').trim().toUpperCase();
+                if (disp && disp === u) return s;
+            } catch {}
+        }
+        return u;
+    };
+
+    const resolveConceptKeyFromAny = (subjectKeyUpper, val) => {
+        const v = String(val || '').trim();
+        if (!v) return '';
+        const u = v.toUpperCase();
+        const subjU = String(subjectKeyUpper || '').toUpperCase();
+        const knownConc = new Set([
+            ...Object.keys(libraryTree?.[subjU] || {}).map(c => String(c).toUpperCase()),
+            ...Object.keys(customFolders?.subjects?.[subjU]?.concepts || {}).map(c => String(c).toUpperCase()),
+        ]);
+        if (knownConc.has(u)) return u;
+        for (const c of knownConc) {
+            try {
+                const disp = String(getConceptDisplayName(subjU, c) || '').trim().toUpperCase();
+                if (disp && disp === u) return c;
+            } catch {}
+        }
+        return u;
+    };
+
+    // Remove do plano local (todas as datas) — robusto contra renomes
     setReviewPlans((prev) => prev.filter((p) => {
-        const ps = String(p.subject || '').toUpperCase();
-        const pc = String(p.concept || '').toUpperCase();
-        return !(ps === subj && pc === conc);
+        const pSubjKey = resolveSubjectKeyFromAny(p?.subjectKey || p?.subject);
+        const pConcKey = resolveConceptKeyFromAny(pSubjKey, p?.conceptKey || p?.concept);
+
+        // Se o usuário está cancelando a MATÉRIA inteira, removemos tudo daquela matéria (inclusive conceitos)
+        if (!concKey) return pSubjKey !== subjKey;
+        // Se está cancelando um CONCEITO específico
+        return !(pSubjKey === subjKey && pConcKey === concKey);
     }));
 
     // Remove o "due" dos cards (sem resetar progresso)
     setLibrary((prev) => prev.map((card) => {
         const s = String(card?.subject || '').toUpperCase();
         const c = String(card?.concept || '').toUpperCase();
-        if (s !== subj) return card;
-        if (conc && c !== conc) return card;
+        if (s !== subjKey) return card;
+        if (concKey && c !== concKey) return card;
         return { ...card, srsDue: null };
     }));
 
