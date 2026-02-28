@@ -38,6 +38,25 @@ const loadScript = (src) => {
     });
 };
 
+// --- DATE HELPERS (safe for Safari + timezones) ---
+const pad2 = (n) => String(n).padStart(2, '0');
+
+// Always create YYYY-MM-DD in the user's *local* timezone (no UTC shift).
+const dateKeyFromParts = (year, monthIndex0, day) => `${year}-${pad2(monthIndex0 + 1)}-${pad2(day)}`;
+
+const dateKeyFromDateLocal = (d) => {
+    const dt = new Date(d);
+    if (Number.isNaN(dt.getTime())) return '';
+    return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+};
+
+// Parse YYYY-MM-DD to a Date at local noon (avoids DST edge cases & Safari quirks with bare YYYY-MM-DD).
+const parseDateKeyLocalNoon = (dateKey) => {
+    const [y, m, d] = String(dateKey || '').split('-').map((n) => parseInt(n, 10));
+    if (!y || !m || !d) return new Date();
+    return new Date(y, m - 1, d, 12, 0, 0, 0);
+};
+
 // --- COMPONENTES ---
 
 const Toast = ({ message, type, visible }) => (
@@ -170,7 +189,7 @@ const [customFolders, setCustomFolders] = useState(() => {
         return { subjects: {} };
     }
 });
-const [acervoStartDate, setAcervoStartDate] = useState(() => new Date().toISOString().split('T')[0]);
+const [acervoStartDate, setAcervoStartDate] = useState(() => dateKeyFromDateLocal(new Date()));
 
 useEffect(() => {
     try { localStorage.setItem('acervo_custom_folders', JSON.stringify(customFolders)); } catch {}
@@ -228,7 +247,7 @@ const getConceptDisplayName = (subjectAny, conceptAny) => {
             return [];
         }
     });
-    const [plannerDate, setPlannerDate] = useState(() => new Date().toISOString().split('T')[0]);
+    const [plannerDate, setPlannerDate] = useState(() => dateKeyFromDateLocal(new Date()));
     const [plannerSubject, setPlannerSubject] = useState('');
     const [plannerConcept, setPlannerConcept] = useState(''); // vazio = matéria inteira
 
@@ -387,6 +406,8 @@ const [studySessionDateKey, setStudySessionDateKey] = useState('');
     // Acervo: mover pastas (Matéria/Conceito)
     const [movingSubjectKey, setMovingSubjectKey] = useState(null);
     const [movingConceptKey, setMovingConceptKey] = useState(null);
+    const [moveSubjectParentKey, setMoveSubjectParentKey] = useState('');
+    const [moveConceptTargetSubjectKey, setMoveConceptTargetSubjectKey] = useState('');
 
 
 // Acervo: pastas personalizadas (Matéria/Conceito) — persistido
@@ -395,7 +416,7 @@ const [studySessionDateKey, setStudySessionDateKey] = useState('');
 // Review Calendar (planejador simples por dia -> pasta)
 const [isReviewCalendarOpen, setIsReviewCalendarOpen] = useState(false);
 const [reviewCalDate, setReviewCalDate] = useState(() => new Date());
-const [reviewSelectedDay, setReviewSelectedDay] = useState(() => new Date().toISOString().split('T')[0]); // YYYY-MM-DD
+const [reviewSelectedDay, setReviewSelectedDay] = useState(() => dateKeyFromDateLocal(new Date())); // YYYY-MM-DD
 const [reviewPickSubject, setReviewPickSubject] = useState('');
 const [reviewPickConcept, setReviewPickConcept] = useState(''); // vazio = matéria inteira
 
@@ -891,7 +912,9 @@ try {
             const events = Array.isArray(response?.result?.items) ? response.result.items : [];
             const cache = {};
             events.forEach(ev => {
-                const date = (ev.start.dateTime || ev.start.date).split('T')[0];
+                const date = ev?.start?.date
+                    ? String(ev.start.date)
+                    : dateKeyFromDateLocal(new Date(ev?.start?.dateTime || ev?.start?.date || ''));
                 if (!cache[date]) cache[date] = [];
                 cache[date].push(ev);
             });
@@ -986,11 +1009,7 @@ try {
 
 
 // --- Review Calendar helpers (UI) ---
-const toISODate = (d) => {
-    const dt = new Date(d);
-    if (Number.isNaN(dt.getTime())) return '';
-    return dt.toISOString().split('T')[0];
-};
+const toISODate = (d) => dateKeyFromDateLocal(d);
 
 const getMonthMatrix = (baseDate) => {
     const d = new Date(baseDate);
@@ -1215,7 +1234,7 @@ const addFolderToGoogleCalendarFromBase = async (subjectUpper, conceptUpper = nu
         intervals.forEach(days => {
             const date = new Date(base);
             date.setDate(date.getDate() + days);
-            const dateStr = date.toISOString().split('T')[0];
+            const dateStr = dateKeyFromDateLocal(date);
 
             const title = cU ? `🧠 Rev: ${cU} (${sU})` : `🧠 Rev: ${sU}`;
             const desc = [
@@ -1315,7 +1334,7 @@ const addFolderToGoogleCalendarFromBase = async (subjectUpper, conceptUpper = nu
         setSelectedCalDay(day);
         const y = calDate.getFullYear();
         const m = calDate.getMonth();
-        const dateKey = new Date(y, m, day).toISOString().split('T')[0];
+        const dateKey = dateKeyFromParts(y, m, day);
 
         if (calBrushMode && calBrushSubject) {
             // fire-and-forget (não bloquear UI do clique)
@@ -1411,7 +1430,7 @@ const addFolderToGoogleCalendarFromBase = async (subjectUpper, conceptUpper = nu
                 srsEase: 2.5,
                 srsReps: 0,
                 srsInterval: 0,
-                srsDue: new Date().toISOString().split('T')[0], // hoje (entra em revisão já no modo espaçado, se aplicável)
+                srsDue: dateKeyFromDateLocal(new Date()), // hoje (entra em revisão já no modo espaçado, se aplicável)
                 srsLast: null,
                 studyHistory: [],
             };
@@ -1498,7 +1517,7 @@ const addFolderToGoogleCalendarFromBase = async (subjectUpper, conceptUpper = nu
                     srsEase: 2.5,
                     srsReps: 0,
                     srsInterval: 0,
-                    srsDue: new Date().toISOString().split('T')[0],
+                    srsDue: dateKeyFromDateLocal(new Date()),
                     srsLast: null,
                     studyHistory: [],
                 };
@@ -1835,18 +1854,17 @@ const getActiveStudyDateKey = () => {
     if (studyMode === 'spaced' && selectedCalDay) {
         const y = calDate.getFullYear();
         const m = calDate.getMonth();
-        return new Date(y, m, selectedCalDay).toISOString().split('T')[0];
+        return dateKeyFromParts(y, m, selectedCalDay);
     }
-    return new Date().toISOString().split('T')[0];
+    return dateKeyFromDateLocal(new Date());
 };
 
 // SRS helpers (Fase 4)
 const addDaysToDateKey = (dateKey, days) => {
-    const [y, m, d] = String(dateKey || '').split('-').map(n => parseInt(n, 10));
-    if (!y || !m || !d) return new Date().toISOString().split('T')[0];
-    const dt = new Date(y, m - 1, d);
+    const dt = parseDateKeyLocalNoon(dateKey);
+    if (Number.isNaN(dt.getTime())) return dateKeyFromDateLocal(new Date());
     dt.setDate(dt.getDate() + (Number(days) || 0));
-    return dt.toISOString().split('T')[0];
+    return dateKeyFromDateLocal(dt);
 };
 
 const isDueOnOrBefore = (dueKey, targetKey) => {
@@ -2303,9 +2321,101 @@ const promptCreateConcept = (subjectUpper) => {
     showToast('Conceito criado no Acervo', 'success');
 };
 
+// --- ACERVO: MOVER PASTAS (Matéria / Conceito) ---
+const openMoveSubjectModal = (subjectUpper) => {
+    const subjKey = String(subjectUpper || '').toUpperCase();
+    const currentParent = (customFolders?.subjects?.[subjKey]?.parent || subjectParentMap?.[subjKey] || '').toString().toUpperCase();
+    setMovingSubjectKey(subjKey);
+    setMoveSubjectParentKey(currentParent);
+};
+
+const applyMoveSubjectParent = () => {
+    const subjKey = String(movingSubjectKey || '').toUpperCase();
+    const parentKey = String(moveSubjectParentKey || '').toUpperCase();
+    if (!subjKey) return;
+
+    // não pode ser filho de si mesmo
+    const safeParent = parentKey && parentKey !== subjKey ? parentKey : '';
+
+    setCustomFolders(prev => {
+        const base = prev || { subjects: {} };
+        const subjects = { ...(base.subjects || {}) };
+        const subj = subjects[subjKey] || { name: subjKey, concepts: {} };
+        subjects[subjKey] = { ...subj, parent: safeParent };
+        return { ...base, subjects };
+    });
+
+    setMovingSubjectKey(null);
+    setMoveSubjectParentKey('');
+    showToast('Matéria movida', 'success');
+};
+
+const openMoveConceptModal = (subjectUpper, conceptUpper) => {
+    const subjKey = String(subjectUpper || '').toUpperCase();
+    const concKey = String(conceptUpper || '').toUpperCase();
+    setMovingConceptKey(`${subjKey}::${concKey}`);
+    setMoveConceptTargetSubjectKey(subjKey);
+};
+
+const applyMoveConcept = () => {
+    const key = String(movingConceptKey || '');
+    if (!key.includes('::')) return;
+    const [fromSubj, conc] = key.split('::').map(v => String(v || '').toUpperCase());
+    const toSubj = String(moveConceptTargetSubjectKey || '').toUpperCase();
+    if (!fromSubj || !conc || !toSubj) return;
+    if (toSubj === fromSubj) { setMovingConceptKey(null); setMoveConceptTargetSubjectKey(''); return; }
+
+    // Move pasta no Acervo
+    setCustomFolders(prev => {
+        const base = prev || { subjects: {} };
+        const subjects = { ...(base.subjects || {}) };
+
+        const fromEntry = subjects[fromSubj] || { name: fromSubj, concepts: {} };
+        const toEntry = subjects[toSubj] || { name: toSubj, concepts: {} };
+
+        const fromConcepts = { ...(fromEntry.concepts || {}) };
+        const movedConcEntry = fromConcepts[conc] || { name: conc };
+        delete fromConcepts[conc];
+
+        const toConcepts = { ...(toEntry.concepts || {}) };
+        toConcepts[conc] = movedConcEntry;
+
+        subjects[fromSubj] = { ...fromEntry, concepts: fromConcepts };
+        subjects[toSubj] = { ...toEntry, concepts: toConcepts };
+
+        return { ...base, subjects };
+    });
+
+    // Move cards desse conceito para a nova matéria (mantém o nome do conceito)
+    setLibrary(prev => prev.map(card => {
+        const s = String(card?.subject || '').toUpperCase();
+        const c = String(card?.concept || '').toUpperCase();
+        if (s === fromSubj && c === conc) {
+            return { ...card, subject: toSubj };
+        }
+        return card;
+    }));
+
+    // Atualiza planos locais de revisões do Acervo (se existirem)
+    setReviewPlans(prev => (Array.isArray(prev) ? prev.map(p => {
+        const s = String(p?.subject || '').toUpperCase();
+        const c = String(p?.concept || '').toUpperCase();
+        if (s === fromSubj && c === conc) return { ...p, subject: toSubj };
+        return p;
+    }) : prev));
+
+    setMovingConceptKey(null);
+    setMoveConceptTargetSubjectKey('');
+    showToast('Conceito movido', 'success');
+
+    // Recarrega eventos no calendário para refletir marcações (se conectado)
+    try { fetchMonthEvents(); fetchUpcomingEvents(); } catch {}
+};
+
+
 const deleteSubjectFolder = (subjectUpper) => {
     const subjKey = String(subjectUpper || '').toUpperCase();
-    const ok = confirm(`Remover a matéria "${subjectUpper}"?\n\nIsso remove a pasta do Acervo. Os cards dessa matéria também serão removidos do Acervo.`);
+    const ok = window.confirm(`Remover a matéria "${subjectUpper}"?\n\nIsso remove a pasta do Acervo. Os cards dessa matéria também serão removidos do Acervo.`);
     if (!ok) return;
 
     setCustomFolders(prev => {
@@ -2328,7 +2438,7 @@ const deleteSubjectFolder = (subjectUpper) => {
 const deleteConceptFolder = (subjectUpper, conceptUpper) => {
     const subjKey = String(subjectUpper || '').toUpperCase();
     const concKey = String(conceptUpper || '').toUpperCase();
-    const ok = confirm(`Remover o conceito "${conceptUpper}" da matéria "${subjectUpper}"?\n\nOs cards desse conceito também serão removidos do Acervo.`);
+    const ok = window.confirm(`Remover o conceito "${conceptUpper}" da matéria "${subjectUpper}"?\n\nOs cards desse conceito também serão removidos do Acervo.`);
     if (!ok) return;
 
     setCustomFolders(prev => {
@@ -2355,7 +2465,7 @@ const deleteConceptFolder = (subjectUpper, conceptUpper) => {
 const resetSrsForFolder = (subjectUpper, conceptUpper, dueDateKey) => {
     const subjKey = String(subjectUpper || '').toUpperCase();
     const concKey = conceptUpper ? String(conceptUpper).toUpperCase() : null;
-    const due = String(dueDateKey || new Date().toISOString().split('T')[0]);
+    const due = String(dueDateKey || dateKeyFromDateLocal(new Date()));
 
     setLibrary(prev => prev.map(card => {
         const s = String(card?.subject || '').toUpperCase();
@@ -2725,6 +2835,98 @@ const handleStudyAction = (action) => {
                 isOpen={confirm.show} message={confirm.msg} 
                 onConfirm={executeConfirm} onCancel={() => setConfirm({ show: false, msg: '', action: null })} 
             />
+
+            {/* Modal: mover Matéria (hierarquia) */}
+            {movingSubjectKey && (
+                <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[80] flex items-center justify-center p-4" onClick={() => { setMovingSubjectKey(null); setMoveSubjectParentKey(''); }}>
+                    <div className="bg-white rounded-2xl shadow-2xl p-5 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+                        <h3 className="text-base font-extrabold text-slate-800 mb-1">Mover Matéria</h3>
+                        <p className="text-xs text-slate-500 font-semibold mb-4">Escolha uma Matéria pai (opcional). Isso controla a hierarquia no Acervo.</p>
+
+                        <div className="space-y-2">
+                            <div className="text-xs font-extrabold text-slate-700">Matéria</div>
+                            <div className="text-sm font-bold text-slate-900 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">{getSubjectDisplayName(movingSubjectKey)}</div>
+
+                            <div className="text-xs font-extrabold text-slate-700 mt-2">Colocar dentro de</div>
+                            <select
+                                value={moveSubjectParentKey}
+                                onChange={(e) => setMoveSubjectParentKey(e.target.value)}
+                                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-slate-800"
+                            >
+                                <option value="">(Sem pai)</option>
+                                {getAllSubjectKeys().filter(s => String(s).toUpperCase() !== String(movingSubjectKey).toUpperCase()).sort().map((s) => (
+                                    <option key={s} value={s}>{getSubjectDisplayName(s)}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <div className="flex justify-end gap-2 mt-5">
+                            <button
+                                type="button"
+                                onClick={() => { setMovingSubjectKey(null); setMoveSubjectParentKey(''); }}
+                                className="px-4 py-2 rounded-xl font-extrabold text-sm border border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
+                            >
+                                Cancelar
+                            </button>
+                            <button
+                                type="button"
+                                onClick={applyMoveSubjectParent}
+                                className="px-4 py-2 rounded-xl font-extrabold text-sm border border-slate-900 bg-slate-900 hover:bg-slate-800 text-white"
+                            >
+                                Salvar
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal: mover Conceito para outra Matéria */}
+            {movingConceptKey && (
+                <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[80] flex items-center justify-center p-4" onClick={() => { setMovingConceptKey(null); setMoveConceptTargetSubjectKey(''); }}>
+                    <div className="bg-white rounded-2xl shadow-2xl p-5 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+                        <h3 className="text-base font-extrabold text-slate-800 mb-1">Mover Conceito</h3>
+                        {(() => {
+                            const [fromS, conc] = String(movingConceptKey || '').split('::');
+                            const fromSubj = String(fromS || '').toUpperCase();
+                            const concKey = String(conc || '').toUpperCase();
+                            const currentLabel = `${getConceptDisplayName(fromSubj, concKey)} (${getSubjectDisplayName(fromSubj)})`;
+                            return (
+                                <>
+                                    <p className="text-xs text-slate-500 font-semibold mb-4">Mover: <b className="text-slate-800">{currentLabel}</b></p>
+
+                                    <div className="text-xs font-extrabold text-slate-700 mb-1">Destino</div>
+                                    <select
+                                        value={moveConceptTargetSubjectKey}
+                                        onChange={(e) => setMoveConceptTargetSubjectKey(e.target.value)}
+                                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-slate-800"
+                                    >
+                                        {getAllSubjectKeys().sort().map((s) => (
+                                            <option key={s} value={s}>{getSubjectDisplayName(s)}</option>
+                                        ))}
+                                    </select>
+
+                                    <div className="flex justify-end gap-2 mt-5">
+                                        <button
+                                            type="button"
+                                            onClick={() => { setMovingConceptKey(null); setMoveConceptTargetSubjectKey(''); }}
+                                            className="px-4 py-2 rounded-xl font-extrabold text-sm border border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
+                                        >
+                                            Cancelar
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={applyMoveConcept}
+                                            className="px-4 py-2 rounded-xl font-extrabold text-sm border border-slate-900 bg-slate-900 hover:bg-slate-800 text-white"
+                                        >
+                                            Mover
+                                        </button>
+                                    </div>
+                                </>
+                            );
+                        })()}
+                    </div>
+                </div>
+            )}
 
             {/* HEADER */}
             <nav className="glass-header sticky top-0 z-40 mb-8 w-full">
@@ -3413,6 +3615,14 @@ const handleStudyAction = (action) => {
     </button>
     <button
         type="button"
+        onClick={() => openMoveSubjectModal(subject)}
+        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
+        title="Colocar esta Matéria dentro de outra"
+    >
+        ↪
+    </button>
+    <button
+        type="button"
         onClick={() => deleteSubjectFolder(subject)}
         className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-red-100 bg-white hover:bg-red-50 text-red-500"
         title="Remover Matéria"
@@ -3482,6 +3692,14 @@ const handleStudyAction = (action) => {
                                                                     </div>
 
 <div className="flex items-center gap-1.5 pr-1" onClick={(e) => e.stopPropagation()}>
+<button
+        type="button"
+        onClick={() => openMoveConceptModal(subject, concept)}
+        className="text-[11px] px-2 py-1 rounded-lg font-extrabold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
+        title="Mover este Conceito para outra Matéria"
+    >
+        ↪
+    </button>
 <button
         type="button"
         onClick={() => deleteConceptFolder(subject, concept)}
@@ -3588,7 +3806,7 @@ const handleStudyAction = (action) => {
                                         if (!day) return <div key={idx} className="h-12 md:h-14 rounded-xl bg-transparent" />;
                                         const y = calDate.getFullYear();
                                         const m = calDate.getMonth();
-                                        const dateKey = new Date(y, m, day).toISOString().split('T')[0];
+                                        const dateKey = dateKeyFromParts(y, m, day);
                                         const hasEvents = (calEvents?.[dateKey]?.length || 0) > 0;
                                         const isSelected = selectedCalDay === day;
 
@@ -3685,7 +3903,7 @@ const handleStudyAction = (action) => {
                                                     if (!selectedCalDay) return;
                                                     const y = calDate.getFullYear();
                                                     const m = calDate.getMonth();
-                                                    const dateKey = new Date(y, m, selectedCalDay).toISOString().split('T')[0];
+                                                    const dateKey = dateKeyFromParts(y, m, selectedCalDay);
                                                     scheduleFolderOnDate(dateKey, calBrushSubject, calBrushConcept);
                                                 }}
                                                 className="flex-1 bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 text-slate-800 px-4 py-3 rounded-2xl font-extrabold text-sm transition flex items-center justify-center gap-2"
@@ -3726,7 +3944,7 @@ ${label}`, async () => {
                                 {selectedCalDay ? (() => {
                                     const y = calDate.getFullYear();
                                     const m = calDate.getMonth();
-                                    const dateKey = new Date(y, m, selectedCalDay).toISOString().split('T')[0];
+                                    const dateKey = dateKeyFromParts(y, m, selectedCalDay);
 
                                     const events = calEvents?.[dateKey] || [];
                                     const plans = (reviewPlans || []).filter((p) => p?.date === dateKey);
